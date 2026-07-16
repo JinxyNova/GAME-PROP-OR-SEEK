@@ -1,7 +1,6 @@
 package fr.merci.cachecache;
 
 import org.bukkit.Material;
-import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Snowball;
 import org.bukkit.event.EventHandler;
@@ -34,21 +33,10 @@ public class GameListener implements Listener {
         ItemStack hand = player.getInventory().getItemInMainHand();
         if (hand.getType() == Material.AIR) return;
 
-        // Sneak + clic droit avec un bloc = se déguiser / se dé-déguiser
-        if (player.isSneaking()) {
-            if (gameManager.isDisguised(player.getUniqueId())) {
-                gameManager.undisguise(player);
-                player.sendMessage("§7Déguisement retiré.");
-                event.setCancelled(true);
-                return;
-            }
-            if (!hand.getType().isBlock()) {
-                player.sendMessage("§cTiens un bloc en main pour te déguiser !");
-                return;
-            }
-            BlockData data = hand.getType().createBlockData();
-            gameManager.disguise(player, data);
-            player.sendMessage("§aTu es maintenant déguisé en " + hand.getType().name().toLowerCase().replace('_', ' ') + " !");
+        // Pistolet Transformeur (canne à pêche, Prop Hunt uniquement) : se déguiser en visant un bloc,
+        // ou redevenir normal si déjà déguisé
+        if (gameManager.isTransformerTool(hand)) {
+            gameManager.useTransformer(player);
             event.setCancelled(true);
             return;
         }

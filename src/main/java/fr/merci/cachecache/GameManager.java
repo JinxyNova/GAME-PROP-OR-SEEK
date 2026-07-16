@@ -4,6 +4,7 @@ import org.bukkit.*;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.attribute.AttributeModifier;
+import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.BlockDisplay;
@@ -28,19 +29,36 @@ public class GameManager {
 
     public enum State { WAITING, HIDING, SEEKING }
 
+    // Mode de jeu choisi au lancement de la partie
+    public enum Mode { PROP_HUNT, HIDE_AND_SEEK }
+
+    // Distance max (en blocs) que le pistolet transformeur peut viser
+    private static final int TRANSFORMER_RANGE = 20;
+
+    // Temps d'immobilité (en secondes) avant qu'un déguisement soit considéré "figé"
+    private static final int FREEZE_DELAY_SECONDS = 3;
+
     // Paliers de taille disponibles pour les souris (1.0 = taille normale)
     private static final float[] SIZES = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
 
     private final CacheCachePlugin plugin;
     private final NamespacedKey decoyKey;
+    private final NamespacedKey transformerKey;
 
     private State state = State.WAITING;
-    private UUID seeker;
+    private Mode mode = Mode.PROP_HUNT;
+    private final Set<UUID> seekers = new HashSet<>();
     private final Set<UUID> hiders = new HashSet<>();
     private final Set<UUID> found = new HashSet<>();
     private final Map<UUID, BlockDisplay> disguises = new HashMap<>();
     private final Map<UUID, Float> scales = new HashMap<>();
     private final Map<UUID, Location> frozenLoc = new HashMap<>();
+
+    // Suivi "figé" des déguisements (Prop Hunt uniquement)
+    private final Map<UUID, Location> lastMoveLoc = new HashMap<>();
+    private final Map<UUID, Integer> stillSeconds = new HashMap<>();
+    private final Set<UUID> frozenHiders = new HashSet<>();
+    private BukkitTask freezeTask;
 
     private BukkitTask mainTask;
     private int hideSeconds;
@@ -49,6 +67,7 @@ public class GameManager {
     public GameManager(CacheCachePlugin plugin) {
         this.plugin = plugin;
         this.decoyKey = new NamespacedKey(plugin, "decoy");
+        this.transformerKey = new NamespacedKey(plugin, "transformer_tool");
         reloadSettings();
     }
 
@@ -58,9 +77,18 @@ public class GameManager {
     }
 
     public NamespacedKey getDecoyKey() { return decoyKey; }
+    public NamespacedKey getTransformerKey() { return transformerKey; }
     public State getState() { return state; }
+    public Mode getMode() { return mode; }
     public boolean isHider(UUID uuid) { return hiders.contains(uuid) && !found.contains(uuid); }
-    public boolean isSeeker(UUID uuid) { return uuid.equals(seeker); }
+    public boolean isSeeker(UUID uuid) { return seekers.contains(uuid); }
+    public int getSeekerCount() { return seekers.size(); }
+    public int getHiderCount() { return hiders.size(); }
+
+    public boolean isTransformerTool(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR || !item.hasItemMeta()) return false;
+        return item.getItemMeta().getPersistentDataContainer().has(transformerKey, PersistentDataType.BYTE);
+    }
 
     // --- Helper attributs (Registry, résistant aux changements de version) ---
     private Attribute attribute(String key) {
@@ -73,7 +101,12 @@ public class GameManager {
     // Démarrage / fin de partie
     // ---------------------------------------------------------------------
 
-    public void start(CommandSender sender) {
+    /**
+     * Lance une partie.
+     * @param requestedSeekers nombre de chats souhaité (0 ou moins = valeur par défaut : 1)
+     * @param requestedHiders nombre max de souris souhaité (0 ou moins = pas de limite : tous les joueurs restants)
+     */
+    public void start(CommandSender sender, Mode chosenMode, int requestedSeekers, int requestedHiders) {
         if (state != State.WAITING) {
             sender.sendMessage(ChatColor.RED + "Une partie est déjà en cours !");
             return;
@@ -84,50 +117,82 @@ public class GameManager {
             return;
         }
 
+        Collections.shuffle(online);
+        int total = online.size();
+
+        // Le nombre de chats est borné entre 1 et (total - 1) pour garder au moins une souris
+        int seekerCount = requestedSeekers > 0 ? requestedSeekers : 1;
+        seekerCount = Math.max(1, Math.min(seekerCount, total - 1));
+
+        int remainingAfterSeekers = total - seekerCount;
+        // Le nombre de souris est borné par ce qu'il reste de joueurs ; sans précision, tout le monde joue
+        int hiderCount = requestedHiders > 0 ? Math.min(requestedHiders, remainingAfterSeekers) : remainingAfterSeekers;
+        hiderCount = Math.max(1, hiderCount);
+
+        this.mode = chosenMode;
+        seekers.clear();
         hiders.clear();
         found.clear();
         disguises.clear();
         frozenLoc.clear();
         scales.clear();
+        lastMoveLoc.clear();
+        stillSeconds.clear();
+        frozenHiders.clear();
 
-        Collections.shuffle(online);
-        Player chosenSeeker = online.get(0);
-        seeker = chosenSeeker.getUniqueId();
-        for (int i = 1; i < online.size(); i++) {
-            Player hider = online.get(i);
-            hiders.add(hider.getUniqueId());
-            giveHiderKit(hider);
-        }
-        giveSeekerKit(chosenSeeker);
+        List<Player> chosenSeekers = online.subList(0, seekerCount);
+        List<Player> chosenHiders = online.subList(seekerCount, seekerCount + hiderCount);
+        List<Player> bystanders = online.subList(seekerCount + hiderCount, total);
 
-        Location freeze = chosenSeeker.getLocation();
-        frozenLoc.put(seeker, freeze);
         int freezeTicks = hideSeconds * 20 + 20;
-        chosenSeeker.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, freezeTicks, 1, false, false));
-        chosenSeeker.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, freezeTicks, 250, false, false));
-        chosenSeeker.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, freezeTicks, -10, false, false));
+        for (Player s : chosenSeekers) {
+            seekers.add(s.getUniqueId());
+            giveSeekerKit(s);
+            frozenLoc.put(s.getUniqueId(), s.getLocation());
+            s.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, freezeTicks, 1, false, false));
+            s.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, freezeTicks, 250, false, false));
+            s.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, freezeTicks, -10, false, false));
+        }
+        for (Player h : chosenHiders) {
+            hiders.add(h.getUniqueId());
+            giveHiderKit(h);
+        }
+        for (Player b : bystanders) {
+            b.sendMessage(ChatColor.GRAY + "Trop de joueurs pour cette manche, tu regardes cette fois-ci !");
+        }
 
-        Bukkit.broadcastMessage(ChatColor.GOLD + "=== Cache-cache ===");
-        Bukkit.broadcastMessage(ChatColor.YELLOW + chosenSeeker.getName() + ChatColor.GRAY
-                + " est le chat ! Les souris ont " + hideSeconds + " secondes pour se cacher.");
-        for (UUID id : hiders) {
-            Player p = Bukkit.getPlayer(id);
-            if (p != null) {
-                p.sendMessage(ChatColor.GREEN + "Cache-toi ! Tiens un bloc en main puis "
-                        + ChatColor.AQUA + "clic droit + sneak" + ChatColor.GREEN + " pour te déguiser.");
-                p.sendMessage(ChatColor.GREEN + "Le plumeau change ta taille, le feu d'artifice et le sifflet sont des leurres.");
+        String modeLabel = mode == Mode.PROP_HUNT ? "Prop Hunt" : "Cache-cache classique";
+        String seekerNames = chosenSeekers.stream().map(Player::getName).reduce((a, b) -> a + ", " + b).orElse("");
+        Bukkit.broadcastMessage(ChatColor.GOLD + "=== Cache-cache : " + modeLabel + " ===");
+        Bukkit.broadcastMessage(ChatColor.YELLOW + seekerNames + ChatColor.GRAY
+                + (chosenSeekers.size() > 1 ? " sont les chats ! " : " est le chat ! ")
+                + "Les souris ont " + hideSeconds + " secondes pour se cacher.");
+        for (Player p : chosenHiders) {
+            if (mode == Mode.PROP_HUNT) {
+                p.sendMessage(ChatColor.GREEN + "Utilise le " + ChatColor.AQUA + "Pistolet Transformeur"
+                        + ChatColor.GREEN + " (clic droit en visant un bloc) pour te déguiser, et re-clic droit pour redevenir toi-même.");
+                p.sendMessage(ChatColor.GRAY + "Reste immobile " + FREEZE_DELAY_SECONDS + " secondes pour devenir un vrai bloc figé !");
+            } else {
+                p.sendMessage(ChatColor.GREEN + "Cache-toi ! Tu restes un joueur normal dans ce mode.");
             }
+            p.sendMessage(ChatColor.GREEN + "Le redimensionneur change ta taille, le feu d'artifice et le sifflet sont des leurres.");
         }
 
         state = State.HIDING;
-        runCountdown(hideSeconds, () -> beginSeeking(chosenSeeker));
+        if (mode == Mode.PROP_HUNT) startFreezeTracking();
+        runCountdown(hideSeconds, this::beginSeeking);
     }
 
-    private void beginSeeking(Player seekerPlayer) {
+    private void beginSeeking() {
         if (state != State.HIDING) return;
         state = State.SEEKING;
-        frozenLoc.remove(seeker);
-        Bukkit.broadcastMessage(ChatColor.RED + "C'est parti, " + seekerPlayer.getName() + " part à la recherche !");
+        frozenLoc.clear();
+        String names = seekers.stream()
+                .map(Bukkit::getPlayer)
+                .filter(Objects::nonNull)
+                .map(Player::getName)
+                .reduce((a, b) -> a + ", " + b).orElse("Les chats");
+        Bukkit.broadcastMessage(ChatColor.RED + "C'est parti, " + names + " part" + (seekers.size() > 1 ? "ent" : "") + " à la recherche !");
         runSeekPhase();
     }
 
@@ -160,8 +225,9 @@ public class GameManager {
                     endGame(false);
                     return;
                 }
-                Player seekerPlayer = Bukkit.getPlayer(seeker);
-                if (seekerPlayer != null) {
+                for (UUID seekerId : seekers) {
+                    Player seekerPlayer = Bukkit.getPlayer(seekerId);
+                    if (seekerPlayer == null) continue;
                     double nearest = Double.MAX_VALUE;
                     for (UUID id : hiders) {
                         if (found.contains(id)) continue;
@@ -182,7 +248,59 @@ public class GameManager {
         }.runTaskTimer(plugin, 0L, 20L);
     }
 
+    // ---------------------------------------------------------------------
+    // Suivi "figé" : un déguisement immobile depuis FREEZE_DELAY_SECONDS
+    // devient indétectable comme un vrai bloc ; bouger le "dégèle" aussitôt.
+    // ---------------------------------------------------------------------
+
+    private void startFreezeTracking() {
+        freezeTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (state == State.WAITING) { cancel(); return; }
+                for (UUID id : hiders) {
+                    if (found.contains(id) || !isDisguised(id)) continue;
+                    Player p = Bukkit.getPlayer(id);
+                    if (p == null) continue;
+                    Location current = p.getLocation();
+                    Location last = lastMoveLoc.get(id);
+                    boolean moved = last == null
+                            || last.distanceSquared(current) > 0.01
+                            || !Objects.equals(last.getWorld(), current.getWorld());
+                    if (moved) {
+                        lastMoveLoc.put(id, current);
+                        stillSeconds.put(id, 0);
+                        if (frozenHiders.remove(id)) {
+                            p.sendActionBar(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection()
+                                    .deserialize(ChatColor.YELLOW + "Tu bouges, tu n'es plus figé..."));
+                        }
+                    } else {
+                        int seconds = stillSeconds.getOrDefault(id, 0) + 1;
+                        stillSeconds.put(id, seconds);
+                        if (seconds >= FREEZE_DELAY_SECONDS && frozenHiders.add(id)) {
+                            p.sendActionBar(net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection()
+                                    .deserialize(ChatColor.AQUA + "Figé comme un vrai bloc !"));
+                        }
+                    }
+                }
+            }
+        }.runTaskTimer(plugin, 20L, 20L);
+    }
+
+    private void stopFreezeTracking() {
+        if (freezeTask != null) {
+            freezeTask.cancel();
+            freezeTask = null;
+        }
+        lastMoveLoc.clear();
+        stillSeconds.clear();
+        frozenHiders.clear();
+    }
+
+    public boolean isFrozen(UUID id) { return frozenHiders.contains(id); }
+
     private void endGame(boolean seekerWins) {
+        stopFreezeTracking();
         if (mainTask != null) mainTask.cancel();
         if (seekerWins) {
             Bukkit.broadcastMessage(ChatColor.GOLD + "Le chat a gagné, tout le monde a été trouvé !");
@@ -197,17 +315,19 @@ public class GameManager {
                 p.setGameMode(GameMode.SURVIVAL);
             }
         }
-        Player seekerPlayer = Bukkit.getPlayer(seeker);
-        if (seekerPlayer != null) {
-            seekerPlayer.removePotionEffect(PotionEffectType.BLINDNESS);
-            seekerPlayer.removePotionEffect(PotionEffectType.SLOWNESS);
-            seekerPlayer.removePotionEffect(PotionEffectType.JUMP_BOOST);
+        for (UUID id : seekers) {
+            Player seekerPlayer = Bukkit.getPlayer(id);
+            if (seekerPlayer != null) {
+                seekerPlayer.removePotionEffect(PotionEffectType.BLINDNESS);
+                seekerPlayer.removePotionEffect(PotionEffectType.SLOWNESS);
+                seekerPlayer.removePotionEffect(PotionEffectType.JUMP_BOOST);
+            }
         }
         hiders.clear();
         found.clear();
         frozenLoc.clear();
         scales.clear();
-        seeker = null;
+        seekers.clear();
         state = State.WAITING;
     }
 
@@ -257,6 +377,9 @@ public class GameManager {
         display.addPassenger(player);
         disguises.put(id, display);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+        lastMoveLoc.put(id, player.getLocation());
+        stillSeconds.put(id, 0);
+        frozenHiders.remove(id);
     }
 
     public void undisguise(Player player) {
@@ -267,9 +390,33 @@ public class GameManager {
             display.remove();
         }
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
+        lastMoveLoc.remove(id);
+        stillSeconds.remove(id);
+        frozenHiders.remove(id);
     }
 
     public boolean isDisguised(UUID id) { return disguises.containsKey(id); }
+
+    /**
+     * Utilise le Pistolet Transformeur : vise un bloc et se déguise dessus,
+     * ou redevient normal si déjà déguisé. Retourne un message à afficher au joueur.
+     */
+    public void useTransformer(Player player) {
+        UUID id = player.getUniqueId();
+        if (isDisguised(id)) {
+            undisguise(player);
+            player.sendMessage(ChatColor.GRAY + "Tu redeviens toi-même !");
+            return;
+        }
+        Block target = player.getTargetBlockExact(TRANSFORMER_RANGE, FluidCollisionMode.NEVER);
+        if (target == null || target.getType().isAir() || !target.getType().isSolid()) {
+            player.sendMessage(ChatColor.RED + "Vise un bloc valide (à " + TRANSFORMER_RANGE + " blocs max) !");
+            return;
+        }
+        disguise(player, target.getBlockData());
+        player.sendMessage(ChatColor.GREEN + "Transformé en "
+                + target.getType().name().toLowerCase().replace('_', ' ') + " !");
+    }
 
     private Transformation buildTransformation(float scale) {
         return new Transformation(
@@ -369,8 +516,26 @@ public class GameManager {
         player.getInventory().setItem(1, firework);
         player.getInventory().setItem(2, horn);
 
+        if (mode == Mode.PROP_HUNT) {
+            player.getInventory().setItem(3, buildTransformerTool());
+        }
+
         scales.put(player.getUniqueId(), 1.0f);
         applyScale(player, 1.0f);
+    }
+
+    private ItemStack buildTransformerTool() {
+        ItemStack rod = new ItemStack(Material.FISHING_ROD);
+        ItemMeta meta = rod.getItemMeta();
+        meta.setDisplayName(ChatColor.LIGHT_PURPLE + "Pistolet Transformeur");
+        meta.setLore(Arrays.asList(
+                ChatColor.GRAY + "Clic droit en visant un bloc : te déguiser dessus",
+                ChatColor.GRAY + "Clic droit une nouvelle fois : redevenir toi-même"
+        ));
+        meta.setUnbreakable(true);
+        meta.getPersistentDataContainer().set(transformerKey, PersistentDataType.BYTE, (byte) 1);
+        rod.setItemMeta(meta);
+        return rod;
     }
 
     private void giveSeekerKit(Player player) {
