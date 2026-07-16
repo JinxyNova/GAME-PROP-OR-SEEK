@@ -10,9 +10,11 @@ public class CacheCachePlugin extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         this.gameManager = new GameManager(this);
+        GameMenu gameMenu = new GameMenu(this, gameManager);
 
-        getCommand("cachecache").setExecutor(new CacheCacheCommand(this, gameManager));
+        getCommand("cachecache").setExecutor(new CacheCacheCommand(this, gameManager, gameMenu));
         getServer().getPluginManager().registerEvents(new GameListener(gameManager), this);
+        getServer().getPluginManager().registerEvents(gameMenu, this);
 
         getLogger().info("CacheCache est activé !");
     }

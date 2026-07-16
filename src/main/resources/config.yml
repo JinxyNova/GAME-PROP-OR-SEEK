@@ -62,6 +62,23 @@ resize:
   allowed-in-prophunt: false
 
 # ---------------------------------------------------------------------
+# Leurres des souris (feu d'artifice / sifflet)
+# ---------------------------------------------------------------------
+decoys:
+  # Nombre de feux d'artifice donnés à chaque souris au début de la partie.
+  firework-count: 8
+  # Nombre de sifflets (leurres lancés à la main) donnés à chaque souris.
+  whistle-count: 3
+  auto-whistle:
+    # Si activé, un coup de sifflet retentit automatiquement, tout seul,
+    # à la position réelle de chaque souris encore en jeu, à intervalles
+    # réguliers pendant la phase de recherche (indépendant des sifflets
+    # que les souris lancent elles-mêmes).
+    enabled: true
+    # Intervalle (en secondes) entre deux coups de sifflet automatiques.
+    interval-seconds: 60
+
+# ---------------------------------------------------------------------
 # Affichage
 # ---------------------------------------------------------------------
 # Masque le pseudo flottant au-dessus de la tête des chats et des

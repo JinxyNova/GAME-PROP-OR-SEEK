@@ -9,6 +9,7 @@ commands:
     aliases: [cc]
     description: Gère une partie de cache-cache
     usage: |
+      /cachecache ou /cachecache menu - ouvre le menu graphique (toutes les options en un clic)
       /cachecache start <prophunt|hideandseek> [nbChats] [nbSouris] - lance immédiatement
       /cachecache queue <prophunt|hideandseek> [nbChats] [nbSouris] - préconfigure la file d'attente
       /cachecache join - rejoint la file d'attente

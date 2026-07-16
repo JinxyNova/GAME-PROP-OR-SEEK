@@ -9,19 +9,27 @@ import org.bukkit.entity.Player;
 public class CacheCacheCommand implements CommandExecutor {
     private final CacheCachePlugin plugin;
     private final GameManager gameManager;
+    private final GameMenu gameMenu;
 
-    public CacheCacheCommand(CacheCachePlugin plugin, GameManager gameManager) {
+    public CacheCacheCommand(CacheCachePlugin plugin, GameManager gameManager, GameMenu gameMenu) {
         this.plugin = plugin;
         this.gameManager = gameManager;
+        this.gameMenu = gameMenu;
     }
 
     private static final String USAGE = ChatColor.YELLOW
-            + "/cachecache start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload";
+            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload";
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length == 0) {
-            sender.sendMessage(USAGE);
+        // Sans argument (ou /cachecache menu) : ouvre le menu graphique, bien
+        // plus pratique qu'une longue commande à taper à la main.
+        if (args.length == 0 || args[0].equalsIgnoreCase("menu")) {
+            if (sender instanceof Player player) {
+                gameMenu.openMain(player);
+            } else {
+                sender.sendMessage(USAGE);
+            }
             return true;
         }
         switch (args[0].toLowerCase()) {

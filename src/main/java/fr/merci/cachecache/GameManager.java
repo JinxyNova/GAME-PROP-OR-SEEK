@@ -99,6 +99,16 @@ public class GameManager {
     private boolean hideNametags;
     private boolean showTimerActionbar;
 
+    private int decoyFireworkCount;
+    private int decoyWhistleCount;
+    private boolean autoWhistleEnabled;
+    private int autoWhistleIntervalSeconds;
+
+    // Tâche qui fait "suivre" les BlockDisplay de déguisement à la position
+    // réelle de leur joueur (au lieu de les monter dessus, cf. bug de blocage
+    // dans les murs / téléportation forcée quand on était passager du display).
+    private BukkitTask followTask;
+
     public GameManager(CacheCachePlugin plugin) {
         this.plugin = plugin;
         this.decoyKey = new NamespacedKey(plugin, "decoy");
@@ -125,6 +135,11 @@ public class GameManager {
 
         hideNametags = plugin.getConfig().getBoolean("hide-nametags", true);
         showTimerActionbar = plugin.getConfig().getBoolean("show-timer-actionbar", true);
+
+        decoyFireworkCount = Math.max(0, plugin.getConfig().getInt("decoys.firework-count", 8));
+        decoyWhistleCount = Math.max(0, plugin.getConfig().getInt("decoys.whistle-count", 3));
+        autoWhistleEnabled = plugin.getConfig().getBoolean("decoys.auto-whistle.enabled", true);
+        autoWhistleIntervalSeconds = Math.max(5, plugin.getConfig().getInt("decoys.auto-whistle.interval-seconds", 60));
     }
 
     private float[] loadSizes() {
@@ -375,7 +390,14 @@ public class GameManager {
         seekers.clear();
         hiders.clear();
         found.clear();
+        for (BlockDisplay display : disguises.values()) {
+            if (display.isValid()) display.remove();
+        }
         disguises.clear();
+        if (followTask != null) {
+            followTask.cancel();
+            followTask = null;
+        }
         frozenLoc.clear();
         scales.clear();
         lastMoveLoc.clear();
@@ -481,6 +503,13 @@ public class GameManager {
                 if (hotColdActive && !hotColdAnnounced) {
                     hotColdAnnounced = true;
                     Bukkit.broadcastMessage(ChatColor.LIGHT_PURPLE + "Le radar chaud/froid des chats s'active !");
+                }
+
+                // Toutes les X secondes (config decoys.auto-whistle), un coup de
+                // sifflet automatique retentit à la position réelle de chaque
+                // souris encore en jeu (sans qu'elle ait besoin de le lancer).
+                if (autoWhistleEnabled && left % autoWhistleIntervalSeconds == 0) {
+                    autoWhistlePulse();
                 }
 
                 String timeStr = formatTime(left);
@@ -679,25 +708,71 @@ public class GameManager {
             d.setBlock(data);
             d.setTransformation(buildTransformation(scale));
         });
-        display.addPassenger(player);
+        // Important : on NE monte PLUS le joueur sur le display (addPassenger).
+        // Le monter dessus verrouillait sa position sur celle (arrondie à la
+        // grille) du display : s'il se trouvait près d'un mur, son corps se
+        // retrouvait fusionné avec un bloc solide (dégâts d'étouffement en
+        // boucle) et il était sans cesse "recollé" à cet endroit, impossible
+        // à déplacer où on voulait. À la place, le display suit juste la
+        // position du joueur à chaque tick (cf. startFollowTask), et le
+        // joueur garde un déplacement 100% normal et libre.
         disguises.put(id, display);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
         lastMoveLoc.put(id, player.getLocation());
         stillSeconds.put(id, 0);
         frozenHiders.remove(id);
+        startFollowTask();
     }
 
     public void undisguise(Player player) {
         UUID id = player.getUniqueId();
         BlockDisplay display = disguises.remove(id);
         if (display != null) {
-            display.eject();
             display.remove();
         }
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
         lastMoveLoc.remove(id);
         stillSeconds.remove(id);
         frozenHiders.remove(id);
+        stopFollowTaskIfEmpty();
+    }
+
+    // ---------------------------------------------------------------------
+    // Suivi visuel des déguisements (le BlockDisplay suit le joueur, sans
+    // que le joueur ne soit un passager)
+    // ---------------------------------------------------------------------
+
+    private void startFollowTask() {
+        if (followTask != null) return;
+        followTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (disguises.isEmpty()) return;
+                for (Map.Entry<UUID, BlockDisplay> entry : disguises.entrySet()) {
+                    BlockDisplay display = entry.getValue();
+                    if (display == null || !display.isValid()) continue;
+                    Player p = Bukkit.getPlayer(entry.getKey());
+                    if (p == null) continue;
+                    Location loc = p.getLocation();
+                    Location target = new Location(loc.getWorld(),
+                            Math.floor(loc.getX()), Math.floor(loc.getY()), Math.floor(loc.getZ()), 0f, 0f);
+                    Location current = display.getLocation();
+                    if (!Objects.equals(current.getWorld(), target.getWorld())
+                            || current.getBlockX() != target.getBlockX()
+                            || current.getBlockY() != target.getBlockY()
+                            || current.getBlockZ() != target.getBlockZ()) {
+                        display.teleport(target);
+                    }
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    private void stopFollowTaskIfEmpty() {
+        if (disguises.isEmpty() && followTask != null) {
+            followTask.cancel();
+            followTask = null;
+        }
     }
 
     public boolean isDisguised(UUID id) { return disguises.containsKey(id); }
@@ -801,6 +876,23 @@ public class GameManager {
         }
     }
 
+    /**
+     * Coup de sifflet automatique et périodique, joué directement à la
+     * position réelle de chaque souris encore en jeu (pas de projectile,
+     * contrairement au sifflet-leurre lancé manuellement).
+     */
+    private void autoWhistlePulse() {
+        for (UUID id : hiders) {
+            if (found.contains(id)) continue;
+            Player p = Bukkit.getPlayer(id);
+            if (p == null) continue;
+            World world = p.getWorld();
+            Location loc = p.getLocation();
+            world.playSound(loc, Sound.BLOCK_NOTE_BLOCK_FLUTE, SoundCategory.MASTER, 3.0f, 2.0f);
+            world.spawnParticle(Particle.NOTE, loc, 5);
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Équipement
     // ---------------------------------------------------------------------
@@ -822,12 +914,16 @@ public class GameManager {
                     ChatColor.GRAY + "Clic droit pour changer de taille");
             player.getInventory().setItem(slot++, resize);
         }
-        ItemStack firework = named(Material.FIREWORK_ROCKET, 2, ChatColor.GOLD + "Leurre : Feu d'artifice",
-                ChatColor.GRAY + "Clic droit pour lancer");
-        ItemStack horn = named(Material.GOAT_HORN, 1, ChatColor.AQUA + "Leurre : Sifflet",
-                ChatColor.GRAY + "Clic droit pour lancer");
-        player.getInventory().setItem(slot++, firework);
-        player.getInventory().setItem(slot++, horn);
+        if (decoyFireworkCount > 0) {
+            ItemStack firework = named(Material.FIREWORK_ROCKET, Math.min(decoyFireworkCount, 64),
+                    ChatColor.GOLD + "Leurre : Feu d'artifice", ChatColor.GRAY + "Clic droit pour lancer");
+            player.getInventory().setItem(slot++, firework);
+        }
+        if (decoyWhistleCount > 0) {
+            ItemStack horn = named(Material.GOAT_HORN, Math.min(decoyWhistleCount, 64),
+                    ChatColor.AQUA + "Leurre : Sifflet", ChatColor.GRAY + "Clic droit pour lancer");
+            player.getInventory().setItem(slot++, horn);
+        }
 
         // Le Pistolet Transformeur n'est donné qu'aux souris, et seulement en mode Prop Hunt
         if (mode == Mode.PROP_HUNT) {
