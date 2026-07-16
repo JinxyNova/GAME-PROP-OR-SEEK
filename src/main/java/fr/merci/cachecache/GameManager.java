@@ -48,8 +48,15 @@ public class GameManager {
     // Paliers de taille par défaut (utilisés si "resize.sizes" est vide/absent dans le config.yml)
     private static final float[] DEFAULT_SIZES = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
 
-    // Nom de l'équipe scoreboard utilisée pour masquer les pseudos au-dessus des têtes
-    private static final String HIDE_TEAM_NAME = "cachecache_hide";
+    // Deux équipes séparées (et non une seule partagée) : Minecraft affiche un
+    // joueur invisible en TRANSLUCIDE (pas totalement invisible) aux yeux des
+    // autres joueurs de sa PROPRE équipe. En mettant chats et souris dans la
+    // même équipe, les souris déguisées redevenaient visibles (en fondu) pour
+    // les chats malgré l'effet Invisibilité. Avec deux équipes distinctes,
+    // les pseudos restent masqués des deux côtés, mais les souris restent
+    // pleinement invisibles pour les chats.
+    private static final String HIDE_TEAM_SEEKERS = "cachecache_hide_chats";
+    private static final String HIDE_TEAM_HIDERS = "cachecache_hide_souris";
 
     private final CacheCachePlugin plugin;
     private final NamespacedKey decoyKey;
@@ -195,30 +202,36 @@ public class GameManager {
     // Pseudos masqués (équipe scoreboard, cf. option "hide-nametags")
     // ---------------------------------------------------------------------
 
-    private Team getHiddenTeam() {
+    private Team getOrCreateTeam(String name) {
         Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = board.getTeam(HIDE_TEAM_NAME);
+        Team team = board.getTeam(name);
         if (team == null) {
-            team = board.registerNewTeam(HIDE_TEAM_NAME);
+            team = board.registerNewTeam(name);
         }
         team.setOption(Team.Option.NAME_TAG_VISIBILITY, Team.OptionStatus.NEVER);
         return team;
     }
 
-    private void applyNametagHiding(Collection<Player> players) {
+    private void applyNametagHiding(Collection<Player> seekerPlayers, Collection<Player> hiderPlayers) {
         if (!hideNametags) return;
-        Team team = getHiddenTeam();
-        for (Player p : players) {
-            team.addEntry(p.getName());
+        Team seekerTeam = getOrCreateTeam(HIDE_TEAM_SEEKERS);
+        for (Player p : seekerPlayers) {
+            seekerTeam.addEntry(p.getName());
+        }
+        Team hiderTeam = getOrCreateTeam(HIDE_TEAM_HIDERS);
+        for (Player p : hiderPlayers) {
+            hiderTeam.addEntry(p.getName());
         }
     }
 
     private void clearNametagHiding() {
         Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
-        Team team = board.getTeam(HIDE_TEAM_NAME);
-        if (team == null) return;
-        for (String entry : new ArrayList<>(team.getEntries())) {
-            team.removeEntry(entry);
+        for (String teamName : new String[] { HIDE_TEAM_SEEKERS, HIDE_TEAM_HIDERS }) {
+            Team team = board.getTeam(teamName);
+            if (team == null) continue;
+            for (String entry : new ArrayList<>(team.getEntries())) {
+                team.removeEntry(entry);
+            }
         }
     }
 
@@ -436,9 +449,7 @@ public class GameManager {
             b.sendMessage(ChatColor.GRAY + "Trop de joueurs pour cette manche, tu regardes cette fois-ci !");
         }
 
-        List<Player> participants = new ArrayList<>(chosenSeekers);
-        participants.addAll(chosenHiders);
-        applyNametagHiding(participants);
+        applyNametagHiding(chosenSeekers, chosenHiders);
 
         String modeLabel = mode == Mode.PROP_HUNT ? "Prop Hunt" : "Cache-cache classique";
         String seekerNames = chosenSeekers.stream().map(Player::getName).reduce((a, b) -> a + ", " + b).orElse("");
