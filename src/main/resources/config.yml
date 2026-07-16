@@ -42,6 +42,31 @@ lobby:
   #   pitch: 0.0
 
 # ---------------------------------------------------------------------
+# Points de spawn dans la map (remplis automatiquement par
+# /cachecache setmap souris|chats, ne pas éditer à la main)
+# ---------------------------------------------------------------------
+# Les souris sont téléportées à maps.hiders dès le début de la manche.
+# Les chats sont téléportés à maps.seekers seulement au début de la phase
+# de recherche (une fois le temps de cache écoulé), pour ne pas voir où
+# les souris se sont cachées. Si un point n'est pas défini, les joueurs
+# concernés restent où ils étaient.
+# maps:
+#   hiders:
+#     world: world
+#     x: 0.0
+#     y: 64.0
+#     z: 0.0
+#     yaw: 0.0
+#     pitch: 0.0
+#   seekers:
+#     world: world
+#     x: 0.0
+#     y: 64.0
+#     z: 0.0
+#     yaw: 0.0
+#     pitch: 0.0
+
+# ---------------------------------------------------------------------
 # Durées de la partie
 # ---------------------------------------------------------------------
 # Durée (en secondes) pendant laquelle les joueurs cachés peuvent se planquer

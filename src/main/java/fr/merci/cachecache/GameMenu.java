@@ -126,6 +126,65 @@ public class GameMenu implements Listener {
                 ChatColor.GRAY + "feux d'artifice et sifflets-leurres"));
         holder.actions.put(13, (p, click) -> openSettings(p));
 
+        inv.setItem(9, item(Material.ENDER_EYE, ChatColor.LIGHT_PURPLE + "Points de téléportation",
+                ChatColor.GRAY + "Lobby, spawn des souris, spawn des chats"));
+        holder.actions.put(9, (p, click) -> openTeleportPoints(p));
+
+        player.openInventory(inv);
+    }
+
+    // ---------------------------------------------------------------------
+    // Points de téléportation : lobby, spawn souris, spawn chats. Chaque
+    // bouton enregistre la position actuelle du joueur (équivalent graphique
+    // de /cachecache setlobby et /cachecache setmap souris|chats).
+    // ---------------------------------------------------------------------
+
+    private String describeLocation(org.bukkit.Location loc) {
+        if (loc == null || loc.getWorld() == null) return ChatColor.RED + "Non défini";
+        return ChatColor.GRAY + loc.getWorld().getName() + " "
+                + (int) loc.getX() + ", " + (int) loc.getY() + ", " + (int) loc.getZ();
+    }
+
+    private void openTeleportPoints(Player player) {
+        Holder holder = new Holder();
+        Inventory inv = createInventory(holder, 27, ChatColor.GOLD + "Points de téléportation");
+
+        Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            inv.setItem(11, item(Material.BEACON, ChatColor.AQUA + "Point du lobby",
+                    describeLocation(gameManager.getLobbySpawn()),
+                    ChatColor.GRAY + "Clique pour le définir à ta position actuelle"));
+            inv.setItem(13, item(Material.RABBIT_SPAWN_EGG, ChatColor.GREEN + "Spawn des souris",
+                    describeLocation(gameManager.getMapHidersSpawn()),
+                    ChatColor.GRAY + "Clique pour le définir à ta position actuelle"));
+            inv.setItem(15, item(Material.OCELOT_SPAWN_EGG, ChatColor.GOLD + "Spawn des chats",
+                    describeLocation(gameManager.getMapSeekersSpawn()),
+                    ChatColor.GRAY + "Clique pour le définir à ta position actuelle"));
+        };
+        refresh[0].run();
+
+        holder.actions.put(11, (p, click) -> {
+            if (gameManager.setLobbySpawn(p.getLocation())) {
+                p.sendMessage(ChatColor.GREEN + "Point du lobby défini à ta position actuelle.");
+            }
+            refresh[0].run();
+        });
+        holder.actions.put(13, (p, click) -> {
+            if (gameManager.setMapSpawn(true, p.getLocation())) {
+                p.sendMessage(ChatColor.GREEN + "Spawn des souris défini à ta position actuelle.");
+            }
+            refresh[0].run();
+        });
+        holder.actions.put(15, (p, click) -> {
+            if (gameManager.setMapSpawn(false, p.getLocation())) {
+                p.sendMessage(ChatColor.GREEN + "Spawn des chats défini à ta position actuelle.");
+            }
+            refresh[0].run();
+        });
+
+        inv.setItem(26, item(Material.ARROW, ChatColor.GRAY + "Retour"));
+        holder.actions.put(26, (p, click) -> openMain(p));
+
         player.openInventory(inv);
     }
 

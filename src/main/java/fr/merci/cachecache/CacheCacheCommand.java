@@ -18,7 +18,7 @@ public class CacheCacheCommand implements CommandExecutor {
     }
 
     private static final String USAGE = ChatColor.YELLOW
-            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload | setlobby";
+            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload | setlobby | setmap <souris|chats>";
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -86,6 +86,27 @@ public class CacheCacheCommand implements CommandExecutor {
                     sender.sendMessage(ChatColor.RED + "Impossible de définir le point de la file d'attente (monde invalide).");
                 }
             }
+            case "setmap" -> {
+                if (!(sender instanceof Player player)) {
+                    sender.sendMessage(ChatColor.RED + "Seul un joueur peut définir un point de la map.");
+                    return true;
+                }
+                if (args.length < 2) {
+                    sender.sendMessage(ChatColor.YELLOW + "/cachecache setmap <souris|chats>");
+                    return true;
+                }
+                Boolean forHiders = parseMapTarget(args[1]);
+                if (forHiders == null) {
+                    sender.sendMessage(ChatColor.RED + "Précise 'souris' ou 'chats'.");
+                    return true;
+                }
+                if (gameManager.setMapSpawn(forHiders, player.getLocation())) {
+                    sender.sendMessage(ChatColor.GREEN + "Point de spawn " + (forHiders ? "des souris" : "des chats")
+                            + " défini à ta position actuelle.");
+                } else {
+                    sender.sendMessage(ChatColor.RED + "Impossible de définir ce point (monde invalide).");
+                }
+            }
             case "stop" -> gameManager.stop(sender);
             case "reload" -> {
                 plugin.reloadConfig();
@@ -101,6 +122,15 @@ public class CacheCacheCommand implements CommandExecutor {
         return switch (arg.toLowerCase()) {
             case "prophunt" -> GameManager.Mode.PROP_HUNT;
             case "hideandseek" -> GameManager.Mode.HIDE_AND_SEEK;
+            default -> null;
+        };
+    }
+
+    /** @return TRUE = souris, FALSE = chats, null si l'argument n'est reconnu ni comme l'un ni comme l'autre */
+    private Boolean parseMapTarget(String arg) {
+        return switch (arg.toLowerCase()) {
+            case "souris", "hiders", "mice" -> Boolean.TRUE;
+            case "chats", "seekers", "cats" -> Boolean.FALSE;
             default -> null;
         };
     }

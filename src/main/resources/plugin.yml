@@ -17,3 +17,4 @@ commands:
       /cachecache stop - arrête la partie ou annule la file d'attente
       /cachecache reload - recharge le config.yml
       /cachecache setlobby - définit le point de la file d'attente à ta position actuelle
+      /cachecache setmap <souris|chats> - définit le point de spawn des souris ou des chats dans la map

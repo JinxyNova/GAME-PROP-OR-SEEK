@@ -91,6 +91,15 @@ public class GameManager {
     // rejoignant la file, ils passent juste en mode Aventure.
     private Location lobbySpawn;
 
+    // Points de spawn "map" pour la souris et pour les chats (définis via
+    // /cachecache setmap souris|chats), chargés/sauvegardés dans config.yml
+    // sous maps.hiders.* / maps.seekers.*. Les souris y sont téléportées dès
+    // le début de la manche, les chats seulement au début de la recherche
+    // (une fois la période de cache écoulée), pour qu'ils n'apparaissent pas
+    // dans la zone avant que les souris n'aient fini de se cacher.
+    private Location mapHidersSpawn;
+    private Location mapSeekersSpawn;
+
     private BukkitTask mainTask;
     private boolean hotColdAnnounced = false;
 
@@ -159,20 +168,31 @@ public class GameManager {
         autoWhistleEnabled = plugin.getConfig().getBoolean("decoys.auto-whistle.enabled", true);
         autoWhistleIntervalSeconds = Math.max(5, plugin.getConfig().getInt("decoys.auto-whistle.interval-seconds", 60));
 
-        lobbySpawn = loadLobbySpawn();
+        lobbySpawn = loadNamedLocation("lobby.spawn");
+        mapHidersSpawn = loadNamedLocation("maps.hiders");
+        mapSeekersSpawn = loadNamedLocation("maps.seekers");
     }
 
-    private Location loadLobbySpawn() {
-        if (!plugin.getConfig().isSet("lobby.spawn.world")) return null;
-        String worldName = plugin.getConfig().getString("lobby.spawn.world");
+    private Location loadNamedLocation(String path) {
+        if (!plugin.getConfig().isSet(path + ".world")) return null;
+        String worldName = plugin.getConfig().getString(path + ".world");
         World world = Bukkit.getWorld(worldName);
         if (world == null) return null;
-        double x = plugin.getConfig().getDouble("lobby.spawn.x");
-        double y = plugin.getConfig().getDouble("lobby.spawn.y");
-        double z = plugin.getConfig().getDouble("lobby.spawn.z");
-        float yaw = (float) plugin.getConfig().getDouble("lobby.spawn.yaw");
-        float pitch = (float) plugin.getConfig().getDouble("lobby.spawn.pitch");
+        double x = plugin.getConfig().getDouble(path + ".x");
+        double y = plugin.getConfig().getDouble(path + ".y");
+        double z = plugin.getConfig().getDouble(path + ".z");
+        float yaw = (float) plugin.getConfig().getDouble(path + ".yaw");
+        float pitch = (float) plugin.getConfig().getDouble(path + ".pitch");
         return new Location(world, x, y, z, yaw, pitch);
+    }
+
+    private void saveNamedLocation(String path, Location location) {
+        plugin.getConfig().set(path + ".world", location.getWorld().getName());
+        plugin.getConfig().set(path + ".x", location.getX());
+        plugin.getConfig().set(path + ".y", location.getY());
+        plugin.getConfig().set(path + ".z", location.getZ());
+        plugin.getConfig().set(path + ".yaw", location.getYaw());
+        plugin.getConfig().set(path + ".pitch", location.getPitch());
     }
 
     /**
@@ -181,18 +201,34 @@ public class GameManager {
      */
     public boolean setLobbySpawn(Location location) {
         if (location == null || location.getWorld() == null) return false;
-        plugin.getConfig().set("lobby.spawn.world", location.getWorld().getName());
-        plugin.getConfig().set("lobby.spawn.x", location.getX());
-        plugin.getConfig().set("lobby.spawn.y", location.getY());
-        plugin.getConfig().set("lobby.spawn.z", location.getZ());
-        plugin.getConfig().set("lobby.spawn.yaw", location.getYaw());
-        plugin.getConfig().set("lobby.spawn.pitch", location.getPitch());
+        saveNamedLocation("lobby.spawn", location);
         plugin.saveConfig();
         this.lobbySpawn = location.clone();
         return true;
     }
 
     public Location getLobbySpawn() { return lobbySpawn; }
+
+    /**
+     * Définit le point de spawn "map" des souris (forHiders = true) ou des
+     * chats (forHiders = false), utilisé pour les téléporter dans la zone de
+     * jeu au lancement d'une manche (cf. startInternal / beginSeeking).
+     */
+    public boolean setMapSpawn(boolean forHiders, Location location) {
+        if (location == null || location.getWorld() == null) return false;
+        String path = forHiders ? "maps.hiders" : "maps.seekers";
+        saveNamedLocation(path, location);
+        plugin.saveConfig();
+        if (forHiders) {
+            this.mapHidersSpawn = location.clone();
+        } else {
+            this.mapSeekersSpawn = location.clone();
+        }
+        return true;
+    }
+
+    public Location getMapHidersSpawn() { return mapHidersSpawn; }
+    public Location getMapSeekersSpawn() { return mapSeekersSpawn; }
 
     private float[] loadSizes() {
         List<Double> raw = plugin.getConfig().getDoubleList("resize.sizes");
@@ -443,10 +479,12 @@ public class GameManager {
             return;
         }
 
-        // Sortie du mode Aventure du lobby : tout le monde repasse en Survie
-        // avant la répartition des rôles.
+        // Sortie du mode Aventure du lobby : on s'assure que tout le monde y
+        // est bien (utile si la partie est lancée sans passer par la file
+        // d'attente). Le jeu se joue entièrement en mode Aventure (pas de
+        // casse/pose de blocs), pas en Survie.
         for (Player p : online) {
-            p.setGameMode(GameMode.SURVIVAL);
+            p.setGameMode(GameMode.ADVENTURE);
         }
 
         Collections.shuffle(online);
@@ -499,6 +537,10 @@ public class GameManager {
             hiders.add(h.getUniqueId());
             giveHiderKit(h);
             enableDoubleJump(h);
+            // Les souris sont téléportées dans la map dès le début de la manche.
+            if (mapHidersSpawn != null) {
+                h.teleport(mapHidersSpawn);
+            }
         }
         for (Player b : bystanders) {
             b.sendMessage(ChatColor.GRAY + "Trop de joueurs pour cette manche, tu regardes cette fois-ci !");
@@ -536,6 +578,14 @@ public class GameManager {
         if (state != State.HIDING) return;
         state = State.SEEKING;
         frozenLoc.clear();
+        // Les chats sont téléportés dans la map seulement maintenant, une fois
+        // la période de cache écoulée (pour ne pas voir où les souris se planquent).
+        if (mapSeekersSpawn != null) {
+            for (UUID seekerId : seekers) {
+                Player seekerPlayer = Bukkit.getPlayer(seekerId);
+                if (seekerPlayer != null) seekerPlayer.teleport(mapSeekersSpawn);
+            }
+        }
         String names = seekers.stream()
                 .map(Bukkit::getPlayer)
                 .filter(Objects::nonNull)
@@ -696,7 +746,9 @@ public class GameManager {
                 // (redimensionneur, leurres, pistolet transformeur...) ne doivent
                 // pas rester dans les poches d'une souris une fois la manche finie.
                 p.getInventory().clear();
-                p.setGameMode(GameMode.SURVIVAL);
+                p.setGameMode(GameMode.ADVENTURE);
+                // Retour au lobby à la fin de la partie.
+                if (lobbySpawn != null) p.teleport(lobbySpawn);
             }
         }
         for (UUID id : seekers) {
@@ -708,6 +760,9 @@ public class GameManager {
                 disableDoubleJump(seekerPlayer);
                 // Même chose côté chat : épée, arc et flèches sont retirés en fin de manche.
                 seekerPlayer.getInventory().clear();
+                seekerPlayer.setGameMode(GameMode.ADVENTURE);
+                // Retour au lobby à la fin de la partie.
+                if (lobbySpawn != null) seekerPlayer.teleport(lobbySpawn);
             }
         }
         clearNametagHiding();
