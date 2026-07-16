@@ -1,6 +1,74 @@
+# =====================================================================
+#  CacheCache - configuration
+#  Après modification, recharge avec /cachecache reload (pas besoin
+#  de redémarrer le serveur).
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Lobby / file d'attente
+# ---------------------------------------------------------------------
+lobby:
+  # Active la file d'attente (/cachecache join et /leave). Si désactivé,
+  # seul /cachecache start (avec tous les joueurs connectés) fonctionne.
+  enabled: true
+  # Nombre minimum de joueurs dans la file pour déclencher le compte à
+  # rebours automatique.
+  min-players: 2
+  # Durée (en secondes) du compte à rebours avant lancement automatique
+  # une fois le minimum de joueurs atteint.
+  countdown-seconds: 30
+  # Si vrai, la partie démarre automatiquement à la fin du compte à
+  # rebours. Si faux, un administrateur doit lancer /cachecache start
+  # manuellement (ou /cachecache queue pour préconfigurer le lancement).
+  autostart: true
+  # Mode utilisé par défaut quand la file démarre automatiquement et
+  # qu'aucun /cachecache queue n'a été utilisé pour préciser un mode.
+  # Valeurs possibles : prophunt, hideandseek
+  default-mode: prophunt
+
+# ---------------------------------------------------------------------
+# Durées de la partie
+# ---------------------------------------------------------------------
 # Durée (en secondes) pendant laquelle les joueurs cachés peuvent se planquer
 # avant que le chercheur soit libéré
 hide-time-seconds: 20
 
 # Durée (en secondes) de la phase de recherche
 seek-time-seconds: 300
+
+# ---------------------------------------------------------------------
+# Radar "chaud / froid" (retour de distance envoyé aux chats)
+# ---------------------------------------------------------------------
+hotcold:
+  # Active ou désactive complètement le radar chaud/froid.
+  enabled: true
+  # Le radar ne s'active que lorsqu'il reste au maximum ce nombre de
+  # secondes avant la fin du chrono de recherche (ex : 300 = 5 minutes
+  # avant la fin). Avant ce seuil, les chats ne reçoivent aucun indice
+  # de distance, seulement le temps restant.
+  warning-seconds: 300
+
+# ---------------------------------------------------------------------
+# Redimensionneur (plume) des souris
+# ---------------------------------------------------------------------
+resize:
+  # Paliers de taille disponibles, dans n'importe quel ordre (1.0 =
+  # taille normale). Ajoute ou retire des valeurs selon tes préférences.
+  sizes: [0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 1.25, 1.5]
+  # Si faux (par défaut), les souris en mode Prop Hunt ne reçoivent pas
+  # le redimensionneur : elles restent à la taille du bloc choisi, ce
+  # qui évite les faux blocs de taille suspecte. En mode Cache-cache
+  # classique, le redimensionneur est toujours disponible.
+  allowed-in-prophunt: false
+
+# ---------------------------------------------------------------------
+# Affichage
+# ---------------------------------------------------------------------
+# Masque le pseudo flottant au-dessus de la tête des chats et des
+# souris pendant la partie (évite de repérer un déguisement rien qu'en
+# voyant un nom flotter au-dessus d'un bloc).
+hide-nametags: true
+
+# Affiche le temps restant en barre d'action (au-dessus de la barre
+# d'objets) à tous les participants pendant la phase de recherche.
+show-timer-actionbar: true

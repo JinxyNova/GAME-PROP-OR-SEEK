@@ -91,5 +91,6 @@ public class GameListener implements Listener {
         if (gameManager.isDisguised(player.getUniqueId())) {
             gameManager.undisguise(player);
         }
+        gameManager.removeFromLobbyQuietly(player.getUniqueId());
     }
 }
