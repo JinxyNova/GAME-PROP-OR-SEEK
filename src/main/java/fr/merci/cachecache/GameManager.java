@@ -90,6 +90,7 @@ public class GameManager {
 
     private boolean lobbyEnabled;
     private int lobbyMinPlayers;
+    private int lobbyMaxPlayers;
     private int lobbyCountdownSeconds;
     private boolean lobbyAutostart;
     private Mode lobbyDefaultMode;
@@ -126,6 +127,7 @@ public class GameManager {
 
         lobbyEnabled = plugin.getConfig().getBoolean("lobby.enabled", true);
         lobbyMinPlayers = Math.max(2, plugin.getConfig().getInt("lobby.min-players", 2));
+        lobbyMaxPlayers = Math.max(0, plugin.getConfig().getInt("lobby.max-players", 0));
         lobbyCountdownSeconds = Math.max(0, plugin.getConfig().getInt("lobby.countdown-seconds", 30));
         lobbyAutostart = plugin.getConfig().getBoolean("lobby.autostart", true);
         lobbyDefaultMode = "hideandseek".equalsIgnoreCase(plugin.getConfig().getString("lobby.default-mode", "prophunt"))
@@ -239,6 +241,10 @@ public class GameManager {
         }
         if (lobbyPlayers.contains(player.getUniqueId())) {
             player.sendMessage(ChatColor.GRAY + "Tu es déjà dans la file d'attente.");
+            return;
+        }
+        if (lobbyMaxPlayers > 0 && lobbyPlayers.size() >= lobbyMaxPlayers) {
+            player.sendMessage(ChatColor.RED + "La file d'attente est complète (" + lobbyPlayers.size() + "/" + lobbyMaxPlayers + ").");
             return;
         }
         if (state == State.WAITING) {

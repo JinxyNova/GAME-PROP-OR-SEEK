@@ -14,6 +14,10 @@ lobby:
   # Nombre minimum de joueurs dans la file pour déclencher le compte à
   # rebours automatique.
   min-players: 2
+  # Nombre maximum de joueurs acceptés dans la file d'attente en même
+  # temps. Les joueurs en trop ne peuvent pas rejoindre tant qu'une place
+  # ne se libère pas. Mettre 0 pour ne poser aucune limite.
+  max-players: 0
   # Durée (en secondes) du compte à rebours avant lancement automatique
   # une fois le minimum de joueurs atteint.
   countdown-seconds: 30

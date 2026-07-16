@@ -162,38 +162,61 @@ public class GameMenu implements Listener {
 
     private void openSettings(Player player) {
         Holder holder = new Holder();
-        Inventory inv = createInventory(holder, 27, ChatColor.GOLD + "Réglages CacheCache");
+        Inventory inv = createInventory(holder, 36, ChatColor.GOLD + "Réglages CacheCache");
 
         Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
+            int hideTime = getConfigInt("hide-time-seconds", 20);
+            inv.setItem(10, item(Material.OAK_LEAVES,
+                    ChatColor.GREEN + "Temps de cache : " + formatMinSec(hideTime),
+                    ChatColor.GRAY + "Clic gauche : +5s   Clic droit : -5s",
+                    ChatColor.GRAY + "Shift + clic : +30s / -30s"));
+
+            int seekTime = getConfigInt("seek-time-seconds", 300);
+            inv.setItem(11, item(Material.COMPASS,
+                    ChatColor.GREEN + "Temps de recherche : " + formatMinSec(seekTime),
+                    ChatColor.GRAY + "Clic gauche : +30s   Clic droit : -30s",
+                    ChatColor.GRAY + "Shift + clic : +5min / -5min"));
+
+            int minPlayers = getConfigInt("lobby.min-players", 2);
+            inv.setItem(13, item(Material.PLAYER_HEAD,
+                    ChatColor.YELLOW + "Joueurs min pour lancer : " + minPlayers,
+                    ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1"));
+
+            int maxPlayers = getConfigInt("lobby.max-players", 0);
+            inv.setItem(15, item(Material.TOTEM_OF_UNDYING,
+                    ChatColor.YELLOW + "Joueurs max dans la file : " + (maxPlayers <= 0 ? "illimité" : String.valueOf(maxPlayers)),
+                    ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1",
+                    ChatColor.GRAY + "0 = illimité"));
+
             boolean hotColdOn = getConfigBoolean("hotcold.enabled", true);
             int warning = getConfigInt("hotcold.warning-seconds", 300);
-            inv.setItem(10, item(hotColdOn ? Material.LIME_DYE : Material.GRAY_DYE,
+            inv.setItem(19, item(hotColdOn ? Material.LIME_DYE : Material.GRAY_DYE,
                     ChatColor.LIGHT_PURPLE + "Radar Chaud/Froid : " + (hotColdOn ? "Activé" : "Désactivé"),
                     ChatColor.GRAY + "Clique pour activer/désactiver"));
-            inv.setItem(11, item(Material.CLOCK,
+            inv.setItem(20, item(Material.CLOCK,
                     ChatColor.LIGHT_PURPLE + "Délai avant activation : " + formatMinSec(warning),
                     ChatColor.GRAY + "Clic gauche : +30s   Clic droit : -30s",
                     ChatColor.GRAY + "Shift + clic : +5min / -5min"));
 
             boolean autoWhistleOn = getConfigBoolean("decoys.auto-whistle.enabled", true);
             int interval = getConfigInt("decoys.auto-whistle.interval-seconds", 60);
-            inv.setItem(13, item(autoWhistleOn ? Material.LIME_DYE : Material.GRAY_DYE,
+            inv.setItem(22, item(autoWhistleOn ? Material.LIME_DYE : Material.GRAY_DYE,
                     ChatColor.AQUA + "Sifflet auto : " + (autoWhistleOn ? "Activé" : "Désactivé"),
                     ChatColor.GRAY + "Clique pour activer/désactiver"));
-            inv.setItem(14, item(Material.GOAT_HORN,
+            inv.setItem(23, item(Material.GOAT_HORN,
                     ChatColor.AQUA + "Intervalle sifflet auto : " + interval + "s",
                     ChatColor.GRAY + "Clic gauche : +10s   Clic droit : -10s",
                     ChatColor.GRAY + "Shift + clic : +60s / -60s"));
 
             int fireworkCount = getConfigInt("decoys.firework-count", 8);
-            inv.setItem(16, item(Material.FIREWORK_ROCKET,
+            inv.setItem(28, item(Material.FIREWORK_ROCKET,
                     ChatColor.GOLD + "Feux d'artifice donnés : " + fireworkCount,
                     ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1",
                     ChatColor.GRAY + "Shift + clic : +5 / -5"));
 
             int whistleCount = getConfigInt("decoys.whistle-count", 3);
-            inv.setItem(20, item(Material.GOAT_HORN,
+            inv.setItem(29, item(Material.GOAT_HORN,
                     ChatColor.AQUA + "Sifflets-leurres donnés : " + whistleCount,
                     ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1",
                     ChatColor.GRAY + "Shift + clic : +5 / -5"));
@@ -201,35 +224,61 @@ public class GameMenu implements Listener {
         refresh[0].run();
 
         holder.actions.put(10, (p, click) -> {
-            toggleConfigBoolean("hotcold.enabled");
+            int step = click.isShiftClick() ? 30 : 5;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("hide-time-seconds", 20);
+            setConfigInt("hide-time-seconds", Math.max(0, current + step));
             refresh[0].run();
         });
         holder.actions.put(11, (p, click) -> {
+            int step = click.isShiftClick() ? 300 : 30;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("seek-time-seconds", 300);
+            setConfigInt("seek-time-seconds", Math.max(0, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(13, (p, click) -> {
+            int step = click.isRightClick() ? -1 : 1;
+            int current = getConfigInt("lobby.min-players", 2);
+            setConfigInt("lobby.min-players", Math.max(2, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(15, (p, click) -> {
+            int step = click.isRightClick() ? -1 : 1;
+            int current = getConfigInt("lobby.max-players", 0);
+            setConfigInt("lobby.max-players", Math.max(0, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(19, (p, click) -> {
+            toggleConfigBoolean("hotcold.enabled");
+            refresh[0].run();
+        });
+        holder.actions.put(20, (p, click) -> {
             int step = click.isShiftClick() ? 300 : 30;
             if (click.isRightClick()) step = -step;
             int current = getConfigInt("hotcold.warning-seconds", 300);
             setConfigInt("hotcold.warning-seconds", Math.max(0, current + step));
             refresh[0].run();
         });
-        holder.actions.put(13, (p, click) -> {
+        holder.actions.put(22, (p, click) -> {
             toggleConfigBoolean("decoys.auto-whistle.enabled");
             refresh[0].run();
         });
-        holder.actions.put(14, (p, click) -> {
+        holder.actions.put(23, (p, click) -> {
             int step = click.isShiftClick() ? 60 : 10;
             if (click.isRightClick()) step = -step;
             int current = getConfigInt("decoys.auto-whistle.interval-seconds", 60);
             setConfigInt("decoys.auto-whistle.interval-seconds", Math.max(5, current + step));
             refresh[0].run();
         });
-        holder.actions.put(16, (p, click) -> {
+        holder.actions.put(28, (p, click) -> {
             int step = click.isShiftClick() ? 5 : 1;
             if (click.isRightClick()) step = -step;
             int current = getConfigInt("decoys.firework-count", 8);
             setConfigInt("decoys.firework-count", Math.max(0, current + step));
             refresh[0].run();
         });
-        holder.actions.put(20, (p, click) -> {
+        holder.actions.put(29, (p, click) -> {
             int step = click.isShiftClick() ? 5 : 1;
             if (click.isRightClick()) step = -step;
             int current = getConfigInt("decoys.whistle-count", 3);
@@ -237,8 +286,8 @@ public class GameMenu implements Listener {
             refresh[0].run();
         });
 
-        inv.setItem(26, item(Material.ARROW, ChatColor.GRAY + "Retour"));
-        holder.actions.put(26, (p, click) -> openMain(p));
+        inv.setItem(35, item(Material.ARROW, ChatColor.GRAY + "Retour"));
+        holder.actions.put(35, (p, click) -> openMain(p));
 
         player.openInventory(inv);
     }
