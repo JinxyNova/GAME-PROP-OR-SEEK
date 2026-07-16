@@ -1,0 +1,11 @@
+name: CacheCache
+version: '1.0.0'
+main: fr.merci.cachecache.CacheCachePlugin
+api-version: '26.2'
+author: Merci
+description: Un mini-jeu de cache-cache où les cachés peuvent se déguiser en bloc.
+commands:
+  cachecache:
+    aliases: [cc]
+    description: Gère une partie de cache-cache
+    usage: /cachecache <start|stop>

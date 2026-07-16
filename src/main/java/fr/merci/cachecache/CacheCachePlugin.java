@@ -1,0 +1,30 @@
+package fr.merci.cachecache;
+
+import org.bukkit.plugin.java.JavaPlugin;
+
+public class CacheCachePlugin extends JavaPlugin {
+
+    private GameManager gameManager;
+
+    @Override
+    public void onEnable() {
+        saveDefaultConfig();
+        this.gameManager = new GameManager(this);
+
+        getCommand("cachecache").setExecutor(new CacheCacheCommand(gameManager));
+        getServer().getPluginManager().registerEvents(new GameListener(gameManager), this);
+
+        getLogger().info("CacheCache est activé !");
+    }
+
+    @Override
+    public void onDisable() {
+        if (gameManager != null) {
+            gameManager.forceStop();
+        }
+    }
+
+    public GameManager getGameManager() {
+        return gameManager;
+    }
+}

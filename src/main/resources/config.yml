@@ -1,0 +1,6 @@
+# Durée (en secondes) pendant laquelle les joueurs cachés peuvent se planquer
+# avant que le chercheur soit libéré
+hide-time-seconds: 20
+
+# Durée (en secondes) de la phase de recherche
+seek-time-seconds: 300
