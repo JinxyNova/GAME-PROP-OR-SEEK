@@ -41,6 +41,10 @@ public class GameManager {
     // Temps d'immobilité (en secondes) avant qu'un déguisement soit considéré "figé"
     private static final int FREEZE_DELAY_SECONDS = 3;
 
+    // Dernier slot de la barre d'objets (index 8) : jamais rempli par giveHiderKit
+    // (qui utilise au maximum les slots 0 à 3), donc toujours sûr comme "main vide".
+    private static final int EMPTY_HAND_SLOT = 8;
+
     // Paliers de taille par défaut (utilisés si "resize.sizes" est vide/absent dans le config.yml)
     private static final float[] DEFAULT_SIZES = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
 
@@ -718,12 +722,12 @@ public class GameManager {
         // joueur garde un déplacement 100% normal et libre.
         disguises.put(id, display);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
-        // L'effet Invisibilité seul ne suffit pas : Minecraft affiche quand même
-        // l'objet tenu en main (feu d'artifice, sifflet, redimensionneur...) même
-        // sur un joueur invisible. Ça trahissait la souris aux chats malgré le
-        // déguisement. On masque donc complètement l'entité joueur (corps ET
-        // objet en main) côté client de chaque chat, en plus de l'invisibilité.
-        hideFromSeekers(player);
+        // Note : l'effet Invisibilité (contrairement à hidePlayer) laisse l'entité
+        // "connue" du client des chats, donc les coups d'épée/flèche continuent de
+        // toucher normalement. Le seul défaut de l'Invisibilité vanilla, c'est
+        // qu'elle n'occulte pas l'objet tenu en main : on gère ça séparément en
+        // gardant la main de la souris vide par défaut (cf. giveHiderKit /
+        // snapHandToEmpty), plutôt qu'en cachant toute l'entité.
         lastMoveLoc.put(id, player.getLocation());
         stillSeconds.put(id, 0);
         frozenHiders.remove(id);
@@ -737,27 +741,22 @@ public class GameManager {
             display.remove();
         }
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
-        showToSeekers(player);
         lastMoveLoc.remove(id);
         stillSeconds.remove(id);
         frozenHiders.remove(id);
         stopFollowTaskIfEmpty();
     }
 
-    /** Masque totalement une souris (corps + objet en main) aux yeux de tous les chats. */
-    private void hideFromSeekers(Player hider) {
-        for (UUID sid : seekers) {
-            Player seeker = Bukkit.getPlayer(sid);
-            if (seeker != null) seeker.hidePlayer(plugin, hider);
-        }
-    }
-
-    /** Ré-affiche une souris aux chats (trouvée, redevenue elle-même, ou fin de partie). */
-    private void showToSeekers(Player hider) {
-        for (UUID sid : seekers) {
-            Player seeker = Bukkit.getPlayer(sid);
-            if (seeker != null) seeker.showPlayer(plugin, hider);
-        }
+    /**
+     * Repositionne la main de la souris sur un slot garanti vide (le tout dernier
+     * slot de la barre, jamais utilisé par le kit). Appelé juste après avoir donné
+     * le kit, et après chaque utilisation d'un objet, pour qu'un chat ne voie
+     * jamais d'objet flotter dans la main d'une souris déguisée/invisible — seul
+     * défaut restant de l'effet Invisibilité vanilla, qui ne masque pas l'objet
+     * tenu en main.
+     */
+    public void snapHandToEmpty(Player player) {
+        player.getInventory().setHeldItemSlot(EMPTY_HAND_SLOT);
     }
 
     // ---------------------------------------------------------------------
@@ -955,6 +954,9 @@ public class GameManager {
 
         scales.put(player.getUniqueId(), 1.0f);
         applyScale(player, 1.0f);
+        // Main vide par défaut (cf. snapHandToEmpty) : évite qu'un objet du kit
+        // reste visible en permanence dans la main du joueur une fois invisible.
+        snapHandToEmpty(player);
     }
 
     private ItemStack buildTransformerTool() {

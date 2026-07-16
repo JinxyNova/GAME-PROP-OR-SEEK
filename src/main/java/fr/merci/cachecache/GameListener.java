@@ -42,6 +42,7 @@ public class GameListener implements Listener {
         if (gameManager.isTransformerTool(hand)) {
             gameManager.useTransformer(player);
             event.setCancelled(true);
+            gameManager.snapHandToEmpty(player);
             return;
         }
 
@@ -49,12 +50,15 @@ public class GameListener implements Listener {
         if (hand.getType() == Material.FEATHER) {
             gameManager.cycleSize(player);
             event.setCancelled(true);
+            gameManager.snapHandToEmpty(player);
         } else if (hand.getType() == Material.FIREWORK_ROCKET) {
             gameManager.throwDecoy(player, hand, "firework");
             event.setCancelled(true);
+            gameManager.snapHandToEmpty(player);
         } else if (hand.getType() == Material.GOAT_HORN) {
             gameManager.throwDecoy(player, hand, "whistle");
             event.setCancelled(true);
+            gameManager.snapHandToEmpty(player);
         }
     }
 
