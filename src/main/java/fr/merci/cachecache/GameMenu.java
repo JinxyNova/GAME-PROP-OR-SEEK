@@ -121,6 +121,125 @@ public class GameMenu implements Listener {
             p.closeInventory();
         });
 
+        inv.setItem(13, item(Material.ANVIL, ChatColor.GOLD + "Réglages",
+                ChatColor.GRAY + "Radar chaud/froid, sifflet auto,",
+                ChatColor.GRAY + "feux d'artifice et sifflets-leurres"));
+        holder.actions.put(13, (p, click) -> openSettings(p));
+
+        player.openInventory(inv);
+    }
+
+    // ---------------------------------------------------------------------
+    // Réglages : radar chaud/froid, sifflet automatique, décomptes de leurres
+    // ---------------------------------------------------------------------
+
+    private int getConfigInt(String path, int def) {
+        return plugin.getConfig().getInt(path, def);
+    }
+
+    private boolean getConfigBoolean(String path, boolean def) {
+        return plugin.getConfig().getBoolean(path, def);
+    }
+
+    private void setConfigInt(String path, int value) {
+        plugin.getConfig().set(path, value);
+        plugin.saveConfig();
+        gameManager.reloadSettings();
+    }
+
+    private void toggleConfigBoolean(String path) {
+        boolean current = plugin.getConfig().getBoolean(path, true);
+        plugin.getConfig().set(path, !current);
+        plugin.saveConfig();
+        gameManager.reloadSettings();
+    }
+
+    private String formatMinSec(int totalSeconds) {
+        int m = Math.max(0, totalSeconds) / 60;
+        int s = Math.max(0, totalSeconds) % 60;
+        return m + "m" + (s < 10 ? "0" + s : String.valueOf(s)) + "s";
+    }
+
+    private void openSettings(Player player) {
+        Holder holder = new Holder();
+        Inventory inv = createInventory(holder, 27, ChatColor.GOLD + "Réglages CacheCache");
+
+        Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            boolean hotColdOn = getConfigBoolean("hotcold.enabled", true);
+            int warning = getConfigInt("hotcold.warning-seconds", 300);
+            inv.setItem(10, item(hotColdOn ? Material.LIME_DYE : Material.GRAY_DYE,
+                    ChatColor.LIGHT_PURPLE + "Radar Chaud/Froid : " + (hotColdOn ? "Activé" : "Désactivé"),
+                    ChatColor.GRAY + "Clique pour activer/désactiver"));
+            inv.setItem(11, item(Material.CLOCK,
+                    ChatColor.LIGHT_PURPLE + "Délai avant activation : " + formatMinSec(warning),
+                    ChatColor.GRAY + "Clic gauche : +30s   Clic droit : -30s",
+                    ChatColor.GRAY + "Shift + clic : +5min / -5min"));
+
+            boolean autoWhistleOn = getConfigBoolean("decoys.auto-whistle.enabled", true);
+            int interval = getConfigInt("decoys.auto-whistle.interval-seconds", 60);
+            inv.setItem(13, item(autoWhistleOn ? Material.LIME_DYE : Material.GRAY_DYE,
+                    ChatColor.AQUA + "Sifflet auto : " + (autoWhistleOn ? "Activé" : "Désactivé"),
+                    ChatColor.GRAY + "Clique pour activer/désactiver"));
+            inv.setItem(14, item(Material.GOAT_HORN,
+                    ChatColor.AQUA + "Intervalle sifflet auto : " + interval + "s",
+                    ChatColor.GRAY + "Clic gauche : +10s   Clic droit : -10s",
+                    ChatColor.GRAY + "Shift + clic : +60s / -60s"));
+
+            int fireworkCount = getConfigInt("decoys.firework-count", 8);
+            inv.setItem(16, item(Material.FIREWORK_ROCKET,
+                    ChatColor.GOLD + "Feux d'artifice donnés : " + fireworkCount,
+                    ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1",
+                    ChatColor.GRAY + "Shift + clic : +5 / -5"));
+
+            int whistleCount = getConfigInt("decoys.whistle-count", 3);
+            inv.setItem(20, item(Material.GOAT_HORN,
+                    ChatColor.AQUA + "Sifflets-leurres donnés : " + whistleCount,
+                    ChatColor.GRAY + "Clic gauche : +1   Clic droit : -1",
+                    ChatColor.GRAY + "Shift + clic : +5 / -5"));
+        };
+        refresh[0].run();
+
+        holder.actions.put(10, (p, click) -> {
+            toggleConfigBoolean("hotcold.enabled");
+            refresh[0].run();
+        });
+        holder.actions.put(11, (p, click) -> {
+            int step = click.isShiftClick() ? 300 : 30;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("hotcold.warning-seconds", 300);
+            setConfigInt("hotcold.warning-seconds", Math.max(0, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(13, (p, click) -> {
+            toggleConfigBoolean("decoys.auto-whistle.enabled");
+            refresh[0].run();
+        });
+        holder.actions.put(14, (p, click) -> {
+            int step = click.isShiftClick() ? 60 : 10;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("decoys.auto-whistle.interval-seconds", 60);
+            setConfigInt("decoys.auto-whistle.interval-seconds", Math.max(5, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(16, (p, click) -> {
+            int step = click.isShiftClick() ? 5 : 1;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("decoys.firework-count", 8);
+            setConfigInt("decoys.firework-count", Math.max(0, current + step));
+            refresh[0].run();
+        });
+        holder.actions.put(20, (p, click) -> {
+            int step = click.isShiftClick() ? 5 : 1;
+            if (click.isRightClick()) step = -step;
+            int current = getConfigInt("decoys.whistle-count", 3);
+            setConfigInt("decoys.whistle-count", Math.max(0, current + step));
+            refresh[0].run();
+        });
+
+        inv.setItem(26, item(Material.ARROW, ChatColor.GRAY + "Retour"));
+        holder.actions.put(26, (p, click) -> openMain(p));
+
         player.openInventory(inv);
     }
 

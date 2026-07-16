@@ -718,6 +718,12 @@ public class GameManager {
         // joueur garde un déplacement 100% normal et libre.
         disguises.put(id, display);
         player.addPotionEffect(new PotionEffect(PotionEffectType.INVISIBILITY, Integer.MAX_VALUE, 0, false, false));
+        // L'effet Invisibilité seul ne suffit pas : Minecraft affiche quand même
+        // l'objet tenu en main (feu d'artifice, sifflet, redimensionneur...) même
+        // sur un joueur invisible. Ça trahissait la souris aux chats malgré le
+        // déguisement. On masque donc complètement l'entité joueur (corps ET
+        // objet en main) côté client de chaque chat, en plus de l'invisibilité.
+        hideFromSeekers(player);
         lastMoveLoc.put(id, player.getLocation());
         stillSeconds.put(id, 0);
         frozenHiders.remove(id);
@@ -731,10 +737,27 @@ public class GameManager {
             display.remove();
         }
         player.removePotionEffect(PotionEffectType.INVISIBILITY);
+        showToSeekers(player);
         lastMoveLoc.remove(id);
         stillSeconds.remove(id);
         frozenHiders.remove(id);
         stopFollowTaskIfEmpty();
+    }
+
+    /** Masque totalement une souris (corps + objet en main) aux yeux de tous les chats. */
+    private void hideFromSeekers(Player hider) {
+        for (UUID sid : seekers) {
+            Player seeker = Bukkit.getPlayer(sid);
+            if (seeker != null) seeker.hidePlayer(plugin, hider);
+        }
+    }
+
+    /** Ré-affiche une souris aux chats (trouvée, redevenue elle-même, ou fin de partie). */
+    private void showToSeekers(Player hider) {
+        for (UUID sid : seekers) {
+            Player seeker = Bukkit.getPlayer(sid);
+            if (seeker != null) seeker.showPlayer(plugin, hider);
+        }
     }
 
     // ---------------------------------------------------------------------

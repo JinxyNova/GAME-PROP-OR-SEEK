@@ -1,12 +1,16 @@
 package fr.merci.cachecache;
 
 import org.bukkit.Material;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Snowball;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
@@ -62,15 +66,39 @@ public class GameListener implements Listener {
         gameManager.triggerDecoy(snowball, type);
     }
 
+    /** Résout le "vrai" attaquant, que le coup vienne de l'épée (mêlée) ou d'une flèche tirée à l'arc. */
+    private Player resolveAttacker(Entity damager) {
+        if (damager instanceof Player p) return p;
+        if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Player p) return p;
+        return null;
+    }
+
     @EventHandler
     public void onDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
-        if (!(event.getDamager() instanceof Player attacker)) return;
+        Player attacker = resolveAttacker(event.getDamager());
+        if (attacker == null) return;
         if (gameManager.getState() != GameManager.State.SEEKING) return;
         if (!gameManager.isSeeker(attacker.getUniqueId())) return;
         if (!gameManager.isHider(victim.getUniqueId())) return;
         event.setCancelled(true);
         gameManager.markFound(victim);
+    }
+
+    /**
+     * Filet de sécurité global : pendant une partie (cache ou recherche), aucun
+     * participant ne peut mourir (chute, noyade, feu, coup, etc.). Le seul moyen
+     * de "perdre" en tant que souris, c'est d'être trouvé (cf. markFound
+     * ci-dessus) ; personne ne doit jamais voir l'écran de mort.
+     */
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onAnyDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        GameManager.State state = gameManager.getState();
+        if (state != GameManager.State.HIDING && state != GameManager.State.SEEKING) return;
+        if (gameManager.isSeeker(player.getUniqueId()) || gameManager.isHider(player.getUniqueId())) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler
