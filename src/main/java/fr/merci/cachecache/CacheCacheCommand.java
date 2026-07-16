@@ -18,7 +18,7 @@ public class CacheCacheCommand implements CommandExecutor {
     }
 
     private static final String USAGE = ChatColor.YELLOW
-            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload";
+            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload | setlobby";
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -74,6 +74,17 @@ public class CacheCacheCommand implements CommandExecutor {
                     return true;
                 }
                 gameManager.leave(player);
+            }
+            case "setlobby" -> {
+                if (!(sender instanceof Player player)) {
+                    sender.sendMessage(ChatColor.RED + "Seul un joueur peut définir le point de la file d'attente.");
+                    return true;
+                }
+                if (gameManager.setLobbySpawn(player.getLocation())) {
+                    sender.sendMessage(ChatColor.GREEN + "Point de la file d'attente défini à ta position actuelle.");
+                } else {
+                    sender.sendMessage(ChatColor.RED + "Impossible de définir le point de la file d'attente (monde invalide).");
+                }
             }
             case "stop" -> gameManager.stop(sender);
             case "reload" -> {

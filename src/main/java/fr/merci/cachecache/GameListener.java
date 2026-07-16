@@ -15,6 +15,7 @@ import org.bukkit.event.entity.ProjectileHitEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
@@ -105,15 +106,32 @@ public class GameListener implements Listener {
         }
     }
 
+    /** Double saut des chats et souris : intercepte la tentative de vol déclenchée par un double-tap espace. */
+    @EventHandler
+    public void onToggleFlight(PlayerToggleFlightEvent event) {
+        Player player = event.getPlayer();
+        if (!event.isFlying()) return;
+        if (!gameManager.isDoubleJumpEligible(player.getUniqueId())) return;
+        event.setCancelled(true);
+        gameManager.performDoubleJump(player);
+    }
+
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
-        if (gameManager.getState() != GameManager.State.HIDING) return;
         Player player = event.getPlayer();
-        if (!gameManager.isSeeker(player.getUniqueId())) return;
-        var frozen = gameManager.getFrozenLocation(player.getUniqueId());
-        if (frozen == null || event.getTo() == null) return;
-        if (event.getTo().getX() != frozen.getX() || event.getTo().getY() != frozen.getY() || event.getTo().getZ() != frozen.getZ()) {
-            event.setTo(frozen);
+        GameManager.State state = gameManager.getState();
+
+        if (state == GameManager.State.HIDING && gameManager.isSeeker(player.getUniqueId())) {
+            var frozen = gameManager.getFrozenLocation(player.getUniqueId());
+            if (frozen != null && event.getTo() != null
+                    && (event.getTo().getX() != frozen.getX() || event.getTo().getY() != frozen.getY() || event.getTo().getZ() != frozen.getZ())) {
+                event.setTo(frozen);
+            }
+        }
+
+        // Ré-arme le double saut dès que le joueur retouche le sol.
+        if (player.isOnGround() && gameManager.isDoubleJumpEligible(player.getUniqueId())) {
+            gameManager.rearmDoubleJump(player);
         }
     }
 

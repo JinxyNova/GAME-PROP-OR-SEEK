@@ -29,6 +29,17 @@ lobby:
   # qu'aucun /cachecache queue n'a été utilisé pour préciser un mode.
   # Valeurs possibles : prophunt, hideandseek
   default-mode: prophunt
+  # Point de téléportation de la file d'attente. Rempli automatiquement par
+  # /cachecache setlobby (exécuté à la position d'un joueur) : ne pas éditer
+  # à la main. Si absent, les joueurs qui rejoignent la file restent où ils
+  # sont (ils passent quand même en mode Aventure).
+  # spawn:
+  #   world: world
+  #   x: 0.0
+  #   y: 64.0
+  #   z: 0.0
+  #   yaw: 0.0
+  #   pitch: 0.0
 
 # ---------------------------------------------------------------------
 # Durées de la partie

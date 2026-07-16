@@ -16,3 +16,4 @@ commands:
       /cachecache leave - quitte la file d'attente
       /cachecache stop - arrête la partie ou annule la file d'attente
       /cachecache reload - recharge le config.yml
+      /cachecache setlobby - définit le point de la file d'attente à ta position actuelle

@@ -85,6 +85,11 @@ public class GameManager {
     private Mode lobbyMode = Mode.PROP_HUNT;
     private int lobbyRequestedSeekers = 0;
     private int lobbyRequestedHiders = 0;
+    // Point de spawn de la file d'attente (défini via /cachecache setlobby),
+    // chargé/sauvegardé dans config.yml sous lobby.spawn.*. Null tant qu'aucun
+    // admin ne l'a défini : dans ce cas, les joueurs restent où ils sont en
+    // rejoignant la file, ils passent juste en mode Aventure.
+    private Location lobbySpawn;
 
     private BukkitTask mainTask;
     private boolean hotColdAnnounced = false;
@@ -153,7 +158,41 @@ public class GameManager {
         decoyWhistleCount = Math.max(0, plugin.getConfig().getInt("decoys.whistle-count", 3));
         autoWhistleEnabled = plugin.getConfig().getBoolean("decoys.auto-whistle.enabled", true);
         autoWhistleIntervalSeconds = Math.max(5, plugin.getConfig().getInt("decoys.auto-whistle.interval-seconds", 60));
+
+        lobbySpawn = loadLobbySpawn();
     }
+
+    private Location loadLobbySpawn() {
+        if (!plugin.getConfig().isSet("lobby.spawn.world")) return null;
+        String worldName = plugin.getConfig().getString("lobby.spawn.world");
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) return null;
+        double x = plugin.getConfig().getDouble("lobby.spawn.x");
+        double y = plugin.getConfig().getDouble("lobby.spawn.y");
+        double z = plugin.getConfig().getDouble("lobby.spawn.z");
+        float yaw = (float) plugin.getConfig().getDouble("lobby.spawn.yaw");
+        float pitch = (float) plugin.getConfig().getDouble("lobby.spawn.pitch");
+        return new Location(world, x, y, z, yaw, pitch);
+    }
+
+    /**
+     * Définit le point de la file d'attente sur la position donnée et le
+     * sauvegarde dans config.yml (persiste après redémarrage du serveur).
+     */
+    public boolean setLobbySpawn(Location location) {
+        if (location == null || location.getWorld() == null) return false;
+        plugin.getConfig().set("lobby.spawn.world", location.getWorld().getName());
+        plugin.getConfig().set("lobby.spawn.x", location.getX());
+        plugin.getConfig().set("lobby.spawn.y", location.getY());
+        plugin.getConfig().set("lobby.spawn.z", location.getZ());
+        plugin.getConfig().set("lobby.spawn.yaw", location.getYaw());
+        plugin.getConfig().set("lobby.spawn.pitch", location.getPitch());
+        plugin.saveConfig();
+        this.lobbySpawn = location.clone();
+        return true;
+    }
+
+    public Location getLobbySpawn() { return lobbySpawn; }
 
     private float[] loadSizes() {
         List<Double> raw = plugin.getConfig().getDoubleList("resize.sizes");
@@ -267,6 +306,13 @@ public class GameManager {
             lobbyRequestedHiders = 0;
         }
         lobbyPlayers.add(player.getUniqueId());
+        // En file d'attente, les joueurs passent en mode Aventure (pas de casse/pose
+        // de blocs intempestive) et sont téléportés au point de lobby s'il a été
+        // défini via /cachecache setlobby.
+        player.setGameMode(GameMode.ADVENTURE);
+        if (lobbySpawn != null) {
+            player.teleport(lobbySpawn);
+        }
         Bukkit.broadcastMessage(ChatColor.AQUA + player.getName() + ChatColor.GRAY
                 + " a rejoint la file d'attente (" + lobbyPlayers.size() + "/" + lobbyMinPlayers + ")");
         maybeStartLobbyCountdown();
@@ -280,6 +326,7 @@ public class GameManager {
         }
         Bukkit.broadcastMessage(ChatColor.GRAY + player.getName() + " a quitté la file d'attente ("
                 + lobbyPlayers.size() + "/" + lobbyMinPlayers + ")");
+        player.setGameMode(GameMode.SURVIVAL);
         cancelCountdownIfUnderfilled();
         if (lobbyPlayers.isEmpty()) {
             state = State.WAITING;
@@ -396,6 +443,12 @@ public class GameManager {
             return;
         }
 
+        // Sortie du mode Aventure du lobby : tout le monde repasse en Survie
+        // avant la répartition des rôles.
+        for (Player p : online) {
+            p.setGameMode(GameMode.SURVIVAL);
+        }
+
         Collections.shuffle(online);
         int total = online.size();
 
@@ -440,10 +493,12 @@ public class GameManager {
             s.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS, freezeTicks, 1, false, false));
             s.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, freezeTicks, 250, false, false));
             s.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, freezeTicks, -10, false, false));
+            enableDoubleJump(s);
         }
         for (Player h : chosenHiders) {
             hiders.add(h.getUniqueId());
             giveHiderKit(h);
+            enableDoubleJump(h);
         }
         for (Player b : bystanders) {
             b.sendMessage(ChatColor.GRAY + "Trop de joueurs pour cette manche, tu regardes cette fois-ci !");
@@ -636,6 +691,11 @@ public class GameManager {
             if (p != null) {
                 undisguise(p);
                 applyScale(p, 1.0f);
+                disableDoubleJump(p);
+                // Vide l'inventaire à chaque fin de partie : les objets du kit
+                // (redimensionneur, leurres, pistolet transformeur...) ne doivent
+                // pas rester dans les poches d'une souris une fois la manche finie.
+                p.getInventory().clear();
                 p.setGameMode(GameMode.SURVIVAL);
             }
         }
@@ -645,6 +705,9 @@ public class GameManager {
                 seekerPlayer.removePotionEffect(PotionEffectType.BLINDNESS);
                 seekerPlayer.removePotionEffect(PotionEffectType.SLOWNESS);
                 seekerPlayer.removePotionEffect(PotionEffectType.JUMP_BOOST);
+                disableDoubleJump(seekerPlayer);
+                // Même chose côté chat : épée, arc et flèches sont retirés en fin de manche.
+                seekerPlayer.getInventory().clear();
             }
         }
         clearNametagHiding();
@@ -695,6 +758,7 @@ public class GameManager {
         found.add(id);
         undisguise(hider);
         applyScale(hider, 1.0f);
+        disableDoubleJump(hider);
         hider.setGameMode(GameMode.SPECTATOR);
         Bukkit.broadcastMessage(ChatColor.YELLOW + hider.getName() + ChatColor.GRAY
                 + " a été trouvé ! (" + found.size() + "/" + hiders.size() + ")");
@@ -876,6 +940,50 @@ public class GameManager {
             display.setTransformation(buildTransformation(next));
         }
         player.sendMessage(ChatColor.AQUA + "Taille : " + next + "x");
+    }
+
+    // ---------------------------------------------------------------------
+    // Double saut (chats et souris)
+    // ---------------------------------------------------------------------
+    // Astuce classique : setAllowFlight(true) fait apparaître l'invite "double
+    // tap espace pour voler" côté client, même en survie. On intercepte cette
+    // tentative de vol (PlayerToggleFlightEvent) dans GameListener, on l'annule,
+    // et on remplace ça par une impulsion verticale (le "double saut"). Le vol
+    // est ensuite désarmé jusqu'à ce que le joueur retouche le sol (cf.
+    // rearmDoubleJump, appelé depuis onMove), pour n'autoriser qu'un seul saut
+    // supplémentaire par saut normal, pas un vol continu.
+
+    private void enableDoubleJump(Player player) {
+        player.setAllowFlight(true);
+        player.setFlying(false);
+    }
+
+    private void disableDoubleJump(Player player) {
+        player.setAllowFlight(false);
+        player.setFlying(false);
+    }
+
+    public boolean isDoubleJumpEligible(UUID id) {
+        if (state != State.HIDING && state != State.SEEKING) return false;
+        return isSeeker(id) || isHider(id);
+    }
+
+    /** Ré-arme le double saut une fois que le joueur retouche le sol. */
+    public void rearmDoubleJump(Player player) {
+        if (!isDoubleJumpEligible(player.getUniqueId())) return;
+        if (!player.getAllowFlight()) {
+            player.setAllowFlight(true);
+        }
+    }
+
+    /** Consomme le double saut : impulsion verticale, puis vol désarmé jusqu'au prochain atterrissage. */
+    public void performDoubleJump(Player player) {
+        org.bukkit.util.Vector velocity = player.getVelocity();
+        velocity.setY(0.9);
+        player.setVelocity(velocity);
+        player.setFallDistance(0f);
+        player.setFlying(false);
+        player.setAllowFlight(false);
     }
 
     // ---------------------------------------------------------------------
