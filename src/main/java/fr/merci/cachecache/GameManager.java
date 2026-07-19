@@ -96,6 +96,7 @@ public class GameManager {
     // petite que ce bloc (0.5 par ex.) pour pouvoir se faufiler sous un autre bloc bas ou
     // une dalle ailleurs sur la carte. Absent (pas de déguisement en cours) = pas de plafond
     // supplémentaire au-delà de scales.
+    private final Map<UUID, Float> disguiseScale = new HashMap<>();
     // Hauteur RÉELLE (0..1, fraction de la case) du bloc actuellement imité, pour
     // savoir où poser les pieds de quelqu'un qui marche dessus (cf.
     // getDisguiseSupportY) : une dalle doit porter à 0.5, pas à 1.0 comme un bloc
