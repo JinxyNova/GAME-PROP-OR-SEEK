@@ -241,6 +241,30 @@ public class GameManager {
         return arr;
     }
 
+    public float[] getResizeSizes() { return resizeSizes.clone(); }
+
+    /**
+     * Redéfinit les paliers de taille disponibles (cf. /cachecache setsizes),
+     * sauvegardés dans config.yml (resize.sizes) pour survivre à un redémarrage.
+     * @return null si la liste est acceptée, sinon un message d'erreur à afficher.
+     */
+    public String setResizeSizes(List<Float> sizes) {
+        if (sizes == null || sizes.isEmpty()) {
+            return "Il faut donner au moins une taille.";
+        }
+        for (float s : sizes) {
+            if (s <= 0f || s > 10f) {
+                return "Chaque taille doit être strictement positive (et raisonnable, max 10).";
+            }
+        }
+        List<Double> toSave = new ArrayList<>();
+        for (float s : sizes) toSave.add((double) s);
+        plugin.getConfig().set("resize.sizes", toSave);
+        plugin.saveConfig();
+        resizeSizes = loadSizes();
+        return null;
+    }
+
     public NamespacedKey getDecoyKey() { return decoyKey; }
     public NamespacedKey getTransformerKey() { return transformerKey; }
     public State getState() { return state; }
@@ -829,12 +853,13 @@ public class GameManager {
     public void disguise(Player player, BlockData data) {
         UUID id = player.getUniqueId();
         undisguise(player);
-        float scale = scales.getOrDefault(id, 1.0f);
 
-        // On aligne le déguisement sur la grille de blocs (coordonnées entières) et on
-        // verrouille yaw/pitch à 0 : sans ça, le bloc hérite de l'orientation du regard
-        // du joueur au moment de la transformation (rotation non voulue) et n'est pas
-        // calé sur la même grille que les vrais blocs (donc visuellement "pas centré").
+        // Le déguisement est TOUJOURS un bloc à taille normale (échelle 1) : ce
+        // n'est jamais lui qui rétrécit. Ce qui rétrécit, c'est la hitbox du
+        // joueur (cf. cycleSize/applyScale), pour pouvoir se faufiler sous un
+        // bloc de hauteur ou une dalle sans pour autant traverser les blocs.
+        // On aligne donc toujours le bloc sur la grille (coordonnées entières)
+        // et on verrouille yaw/pitch à 0, comme un vrai bloc posé.
         Location playerLoc = player.getLocation();
         Location spawnLoc = new Location(
                 playerLoc.getWorld(),
@@ -846,7 +871,7 @@ public class GameManager {
 
         BlockDisplay display = player.getWorld().spawn(spawnLoc, BlockDisplay.class, d -> {
             d.setBlock(data);
-            d.setTransformation(buildTransformation(scale));
+            d.setTransformation(buildTransformation(1.0f));
         });
         // Important : on NE monte PLUS le joueur sur le display (addPassenger).
         // Le monter dessus verrouillait sa position sur celle (arrondie à la
@@ -911,6 +936,9 @@ public class GameManager {
                     if (display == null || !display.isValid()) continue;
                     Player p = Bukkit.getPlayer(entry.getKey());
                     if (p == null) continue;
+                    // Le bloc du déguisement reste toujours à taille normale : il se
+                    // cale donc toujours sur la grille (coordonnées entières), qu'importe
+                    // la taille (hitbox) réelle du joueur en dessous.
                     Location loc = p.getLocation();
                     Location target = new Location(loc.getWorld(),
                             Math.floor(loc.getX()), Math.floor(loc.getY()), Math.floor(loc.getZ()), 0f, 0f);
@@ -988,13 +1016,22 @@ public class GameManager {
         }
         float next = resizeSizes[(idx + 1) % resizeSizes.length];
         scales.put(id, next);
+        // Rétrécit/agrandit la hitbox et le corps du joueur, pour se faufiler
+        // sous un bloc de hauteur ou une dalle sans traverser les blocs pour
+        // autant (la collision Minecraft reste pleine, juste plus petite).
         applyScale(player, next);
+        // Le bloc du déguisement, lui, NE change PAS de taille : il reste un
+        // vrai bloc à échelle 1, quelle que soit la taille du joueur en dessous.
 
-        BlockDisplay display = disguises.get(id);
-        if (display != null) {
-            display.setTransformation(buildTransformation(next));
+        String passage;
+        if (next <= 0.28f) {
+            passage = ChatColor.GRAY + " — passe sous une dalle";
+        } else if (next < 0.9f) {
+            passage = ChatColor.GRAY + " — passe sous un bloc de hauteur";
+        } else {
+            passage = "";
         }
-        player.sendMessage(ChatColor.AQUA + "Taille : " + next + "x");
+        player.sendMessage(ChatColor.AQUA + "Taille : " + next + "x" + passage);
     }
 
     // ---------------------------------------------------------------------

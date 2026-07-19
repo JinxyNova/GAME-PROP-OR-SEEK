@@ -6,6 +6,9 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class CacheCacheCommand implements CommandExecutor {
     private final CacheCachePlugin plugin;
     private final GameManager gameManager;
@@ -18,7 +21,7 @@ public class CacheCacheCommand implements CommandExecutor {
     }
 
     private static final String USAGE = ChatColor.YELLOW
-            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload | setlobby | setmap <souris|chats>";
+            + "/cachecache menu | start <prophunt|hideandseek> [nbChats] [nbSouris] | queue <prophunt|hideandseek> [nbChats] [nbSouris] | join | leave | stop | reload | setlobby | setmap <souris|chats> | setsizes <liste>";
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -105,6 +108,33 @@ public class CacheCacheCommand implements CommandExecutor {
                             + " défini à ta position actuelle.");
                 } else {
                     sender.sendMessage(ChatColor.RED + "Impossible de définir ce point (monde invalide).");
+                }
+            }
+            case "setsizes" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(ChatColor.YELLOW + "/cachecache setsizes 0.1,0.2,0.3,0.5,0.75,1,1.25,1.5");
+                    sender.sendMessage(ChatColor.GRAY + "Astuce : une taille <= 0.28 passe sous une dalle, une taille < 0.9 passe sous un bloc de hauteur.");
+                    return true;
+                }
+                List<Float> sizes = new ArrayList<>();
+                boolean ok = true;
+                for (String part : args[1].split(",")) {
+                    try {
+                        sizes.add(Float.parseFloat(part.trim()));
+                    } catch (NumberFormatException e) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    sender.sendMessage(ChatColor.RED + "Liste invalide : sépare les tailles par des virgules, ex. 0.1,0.5,1,1.5");
+                    return true;
+                }
+                String error = gameManager.setResizeSizes(sizes);
+                if (error != null) {
+                    sender.sendMessage(ChatColor.RED + error);
+                } else {
+                    sender.sendMessage(ChatColor.GREEN + "Paliers de taille mis à jour : " + args[1]);
                 }
             }
             case "stop" -> gameManager.stop(sender);
