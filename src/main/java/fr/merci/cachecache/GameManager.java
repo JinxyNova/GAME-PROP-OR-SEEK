@@ -22,7 +22,10 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
+import org.bukkit.util.BoundingBox;
+import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Transformation;
+import org.bukkit.util.Vector;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -48,6 +51,17 @@ public class GameManager {
     // Paliers de taille par défaut (utilisés si "resize.sizes" est vide/absent dans le config.yml)
     private static final float[] DEFAULT_SIZES = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
 
+    // --- Ajustement automatique de la taille en fonction de la place au-dessus (cf. autoAdjustScale) ---
+    // Ne jamais rétrécir en dessous de ça, même sous un très petit espace : évite les
+    // soucis vanilla de collision/étouffement aux échelles extrêmes.
+    private static final float MIN_AUTO_SCALE = 0.2f;
+    // Hauteur standard d'un joueur (avant application de l'échelle)
+    private static final double PLAYER_HEIGHT = 1.8;
+    // Marge de sécurité pour ne pas coller pile sous le plafond détecté
+    private static final double CLEARANCE_MARGIN = 0.08;
+    // Nombre de ticks d'espace libre consécutifs avant d'autoriser à regrandir
+    private static final int GROW_BACK_STABLE_TICKS = 6;
+
     // Deux équipes séparées (et non une seule partagée) : Minecraft affiche un
     // joueur invisible en TRANSLUCIDE (pas totalement invisible) aux yeux des
     // autres joueurs de sa PROPRE équipe. En mettant chats et souris dans la
@@ -66,9 +80,26 @@ public class GameManager {
     private Mode mode = Mode.PROP_HUNT;
     private final Set<UUID> seekers = new HashSet<>();
     private final Set<UUID> hiders = new HashSet<>();
+    // Chats de la manche précédente, pour éviter de les retirer au sort juste après (cf. startInternal)
+    private Set<UUID> lastSeekers = new HashSet<>();
     private final Set<UUID> found = new HashSet<>();
     private final Map<UUID, BlockDisplay> disguises = new HashMap<>();
+    // scales = taille "voulue" par le joueur (choisie via le redimensionneur, 1.0 par défaut).
+    // C'est un PLAFOND : l'ajustement automatique (cf. autoAdjustScale) peut rétrécir
+    // en dessous temporairement pour passer sous un bloc bas, mais ne dépassera jamais
+    // cette valeur en revenant à la normale.
     private final Map<UUID, Float> scales = new HashMap<>();
+    // Taille réellement appliquée en ce moment (peut être < scales pendant un passage sous un bloc bas)
+    private final Map<UUID, Float> appliedScale = new HashMap<>();
+    // Plafond de taille imposé par le bloc choisi comme déguisement (Prop Hunt uniquement,
+    // cf. computeDisguiseScale) : une souris déguisée en bloc plein doit rester bien plus
+    // petite que ce bloc (0.5 par ex.) pour pouvoir se faufiler sous un autre bloc bas ou
+    // une dalle ailleurs sur la carte. Absent (pas de déguisement en cours) = pas de plafond
+    // supplémentaire au-delà de scales.
+    private final Map<UUID, Float> disguiseScale = new HashMap<>();
+    // Nombre de ticks consécutifs avec assez de place au-dessus, avant d'autoriser à regrandir
+    // (évite que la taille oscille en marchant sous un plafond irrégulier)
+    private final Map<UUID, Integer> clearStreak = new HashMap<>();
     private final Map<UUID, Location> frozenLoc = new HashMap<>();
 
     // Suivi "figé" des déguisements (Prop Hunt uniquement)
@@ -518,6 +549,22 @@ public class GameManager {
         int seekerCount = requestedSeekers > 0 ? requestedSeekers : 1;
         seekerCount = Math.max(1, Math.min(seekerCount, total - 1));
 
+        // On évite de retomber sur les mêmes chats que la manche précédente
+        // quand une alternative existe : après le shuffle ci-dessus (qui reste
+        // la source du hasard), on repousse juste les anciens chats en fin de
+        // liste pour qu'ils passent en priorité souris cette fois. À 2 joueurs,
+        // ça garantit une vraie alternance (sinon un simple pile-ou-face peut
+        // retomber plusieurs fois de suite sur la même personne et donner
+        // l'impression que le tirage ne fonctionne pas).
+        if (!lastSeekers.isEmpty() && total > seekerCount) {
+            online.sort((a, b) -> {
+                boolean aWasSeeker = lastSeekers.contains(a.getUniqueId());
+                boolean bWasSeeker = lastSeekers.contains(b.getUniqueId());
+                if (aWasSeeker == bWasSeeker) return 0;
+                return aWasSeeker ? 1 : -1;
+            });
+        }
+
         int remainingAfterSeekers = total - seekerCount;
         // Le nombre de souris est borné par ce qu'il reste de joueurs ; sans précision, tout le monde joue
         int hiderCount = requestedHiders > 0 ? Math.min(requestedHiders, remainingAfterSeekers) : remainingAfterSeekers;
@@ -538,6 +585,8 @@ public class GameManager {
         }
         frozenLoc.clear();
         scales.clear();
+        disguiseScale.clear();
+        appliedScale.clear();
         lastMoveLoc.clear();
         stillSeconds.clear();
         frozenHiders.clear();
@@ -545,6 +594,8 @@ public class GameManager {
 
         List<Player> chosenSeekers = online.subList(0, seekerCount);
         List<Player> chosenHiders = online.subList(seekerCount, seekerCount + hiderCount);
+        lastSeekers = new HashSet<>();
+        for (Player s : chosenSeekers) lastSeekers.add(s.getUniqueId());
         List<Player> bystanders = online.subList(seekerCount + hiderCount, total);
 
         int freezeTicks = hideSeconds * 20 + 20;
@@ -850,7 +901,28 @@ public class GameManager {
     // Déguisement en bloc
     // ---------------------------------------------------------------------
 
-    public void disguise(Player player, BlockData data) {
+    public void disguise(Player player, Block target) {
+        disguiseInternal(player, target.getBlockData(), computeDisguiseScale(target));
+    }
+
+    /**
+     * Se déguise directement à partir d'un Material choisi dans le menu (cf.
+     * GameMenu#openBlockPicker), sans avoir besoin de viser un bloc réellement
+     * posé dans le monde. La taille (cf. estimateDisguiseScale) est alors
+     * estimée à partir du nom du bloc plutôt que de sa vraie bounding box,
+     * puisqu'aucun bloc réel n'existe à cet endroit précis.
+     */
+    public void disguiseAsMaterial(Player player, Material material) {
+        if (material == null || !material.isBlock() || !material.isItem()) {
+            player.sendMessage(ChatColor.RED + "Bloc invalide.");
+            return;
+        }
+        disguiseInternal(player, material.createBlockData(), estimateDisguiseScale(material));
+        player.sendMessage(ChatColor.GREEN + "Transformé en "
+                + material.name().toLowerCase().replace('_', ' ') + " !");
+    }
+
+    private void disguiseInternal(Player player, BlockData data, float blockCeiling) {
         UUID id = player.getUniqueId();
         undisguise(player);
 
@@ -892,7 +964,64 @@ public class GameManager {
         lastMoveLoc.put(id, player.getLocation());
         stillSeconds.put(id, 0);
         frozenHiders.remove(id);
+
+        // La souris déguisée doit rester bien plus petite que le bloc qu'elle imite
+        // (le bloc du déguisement, lui, reste toujours à échelle 1, cf. plus haut) :
+        // ça lui permet de se faufiler sous un autre bloc bas ou une dalle ailleurs
+        // sur la carte. Un bloc plein donne donc une taille 0.5, une dalle 0.25, etc.
+        disguiseScale.put(id, blockCeiling);
+        float initial = Math.min(scales.getOrDefault(id, 1.0f), blockCeiling);
+        applyScale(player, initial);
+        appliedScale.put(id, initial);
+        clearStreak.put(id, 0);
         startFollowTask();
+    }
+
+    /**
+     * Taille (échelle) que doit prendre la souris quand elle se déguise sur ce bloc,
+     * calculée à partir de la hauteur réelle du bloc visé (sa "hitbox" dans le monde),
+     * pas de sa taille visuelle affichée (le déguisement reste toujours un bloc plein
+     * à l'écran, cf. buildTransformation). Un bloc plein (hauteur 1) donne une souris
+     * de taille 0.5 ; une dalle ou un tapis (hauteur ~0.5 ou moins) donne une taille
+     * plus petite encore, pour qu'elle puisse ensuite se faufiler ailleurs sous un
+     * bloc bas ou une dalle. Toujours borné à MIN_AUTO_SCALE minimum.
+     */
+    private float computeDisguiseScale(Block target) {
+        double height = 1.0;
+        try {
+            BoundingBox box = target.getBoundingBox();
+            if (box != null && box.getVolume() > 0) {
+                height = box.getHeight();
+            }
+        } catch (Exception ignored) {
+            // Certains blocs (data invalides, versions différentes...) peuvent lever :
+            // on retombe alors sur l'hypothèse "bloc plein" (hauteur 1) par sécurité.
+        }
+        float scale = (float) (Math.min(height, 1.0) * 0.5);
+        return Math.max(scale, MIN_AUTO_SCALE);
+    }
+
+    /**
+     * Même idée que computeDisguiseScale, mais à partir du nom du Material seul
+     * (utilisé pour le menu de sélection, cf. disguiseAsMaterial), puisqu'aucun
+     * bloc réel n'est disponible dans le monde pour mesurer sa vraie bounding box.
+     */
+    private float estimateDisguiseScale(Material material) {
+        String name = material.name();
+        double height;
+        if (name.equals("SNOW") || name.contains("CARPET")) {
+            height = 0.0625;
+        } else if (name.contains("PRESSURE_PLATE")) {
+            height = 0.125;
+        } else if (name.contains("SLAB")) {
+            height = 0.5;
+        } else if (name.contains("BED")) {
+            height = 0.5625;
+        } else {
+            height = 1.0;
+        }
+        float scale = (float) (Math.min(height, 1.0) * 0.5);
+        return Math.max(scale, MIN_AUTO_SCALE);
     }
 
     public void undisguise(Player player) {
@@ -905,6 +1034,15 @@ public class GameManager {
         lastMoveLoc.remove(id);
         stillSeconds.remove(id);
         frozenHiders.remove(id);
+        disguiseScale.remove(id);
+        // On rend sa taille normale au joueur en sortant du déguisement : plus
+        // besoin d'être rétréci pour se faufiler une fois qu'il redevient lui-même.
+        float desired = scales.getOrDefault(id, 1.0f);
+        if (appliedScale.getOrDefault(id, desired) != desired) {
+            applyScale(player, desired);
+        }
+        appliedScale.remove(id);
+        clearStreak.remove(id);
         stopFollowTaskIfEmpty();
     }
 
@@ -949,9 +1087,69 @@ public class GameManager {
                             || current.getBlockZ() != target.getBlockZ()) {
                         display.teleport(target);
                     }
+                    autoAdjustScale(p);
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /**
+     * Ajuste automatiquement la taille (hitbox) de la souris déguisée en
+     * fonction de la place réellement disponible au-dessus d'elle : rétrécit
+     * tout de suite dès qu'un bloc bas ou une dalle approche (sécurité anti-
+     * coincement), et ne regrandit vers sa taille "voulue" (cf. scales,
+     * réglée par le redimensionneur) qu'une fois la place dégagée depuis
+     * quelques ticks d'affilée, pour éviter que la taille n'oscille en
+     * marchant sous un plafond irrégulier.
+     */
+    private void autoAdjustScale(Player player) {
+        UUID id = player.getUniqueId();
+        float desired = Math.min(scales.getOrDefault(id, 1.0f), disguiseScale.getOrDefault(id, 1.0f));
+        float maxFit = computeMaxFittingScale(player, desired);
+        float appliedNow = appliedScale.getOrDefault(id, desired);
+
+        if (maxFit < appliedNow - 0.02f) {
+            // Il faut rétrécir tout de suite : sécurité anti-coincement.
+            appliedScale.put(id, maxFit);
+            applyScale(player, maxFit);
+            clearStreak.put(id, 0);
+        } else if (maxFit > appliedNow + 0.02f) {
+            int streak = clearStreak.getOrDefault(id, 0) + 1;
+            clearStreak.put(id, streak);
+            if (streak >= GROW_BACK_STABLE_TICKS) {
+                appliedScale.put(id, maxFit);
+                applyScale(player, maxFit);
+                clearStreak.put(id, 0);
+            }
+        } else {
+            clearStreak.put(id, 0);
+        }
+    }
+
+    /** Distance verticale (en blocs) entre les pieds du joueur et le premier obstacle solide au-dessus. */
+    private double measureClearance(Player player) {
+        Location feet = player.getLocation();
+        World world = feet.getWorld();
+        Location rayStart = feet.clone().add(0, 0.05, 0);
+        RayTraceResult result = world.rayTraceBlocks(rayStart, new Vector(0, 1, 0), 2.3, FluidCollisionMode.NEVER, true);
+        if (result != null && result.getHitPosition() != null) {
+            return Math.max(0.0, result.getHitPosition().getY() - feet.getY());
+        }
+        return 2.3; // rien détecté dans la marge testée : largement assez de place
+    }
+
+    /**
+     * Plus grande taille qui tient dans la place disponible au-dessus du
+     * joueur, sans jamais dépasser la taille "voulue", ni descendre sous
+     * MIN_AUTO_SCALE (pour éviter les soucis vanilla de collision/étouffement
+     * aux échelles extrêmes).
+     */
+    private float computeMaxFittingScale(Player player, float desired) {
+        double clearance = measureClearance(player);
+        double usable = Math.max(0.0, clearance - CLEARANCE_MARGIN);
+        float maxScale = (float) (usable / PLAYER_HEIGHT);
+        maxScale = Math.min(maxScale, desired);
+        return Math.max(maxScale, MIN_AUTO_SCALE);
     }
 
     private void stopFollowTaskIfEmpty() {
@@ -964,22 +1162,45 @@ public class GameManager {
     public boolean isDisguised(UUID id) { return disguises.containsKey(id); }
 
     /**
-     * Utilise le Pistolet Transformeur : vise un bloc et se déguise dessus,
-     * ou redevient normal si déjà déguisé. Retourne un message à afficher au joueur.
+     * Vrai si "to" tombe dans la case exacte occupée par le déguisement d'une AUTRE
+     * souris que "mover" (peu importe qui : chat ou souris). Utilisé pour rendre les
+     * blocs de déguisement solides : personne ne doit pouvoir marcher au travers,
+     * comme si c'était un vrai bloc, seule la souris déguisée reste libre de bouger
+     * dans sa propre case. Cf. GameListener#onMove.
      */
-    public void useTransformer(Player player) {
-        UUID id = player.getUniqueId();
-        if (isDisguised(id)) {
-            undisguise(player);
-            player.sendMessage(ChatColor.GRAY + "Tu redeviens toi-même !");
-            return;
+    public boolean isBlockedByDisguise(Player mover, Location to) {
+        if (to == null || to.getWorld() == null) return false;
+        if (disguises.isEmpty()) return false;
+        UUID moverId = mover.getUniqueId();
+        for (Map.Entry<UUID, BlockDisplay> entry : disguises.entrySet()) {
+            if (entry.getKey().equals(moverId)) continue;
+            BlockDisplay display = entry.getValue();
+            if (display == null || !display.isValid()) continue;
+            Location d = display.getLocation();
+            if (!Objects.equals(d.getWorld(), to.getWorld())) continue;
+            if (d.getBlockX() == to.getBlockX() && d.getBlockY() == to.getBlockY() && d.getBlockZ() == to.getBlockZ()) {
+                return true;
+            }
         }
+        return false;
+    }
+
+    /**
+     * Version "rapide" du pistolet transformeur (accroupi + clic droit) : vise
+     * un bloc et se déguise directement dessus, sans passer par le menu.
+     * Fonctionne aussi bien pour se déguiser la première fois que pour changer
+     * de bloc alors qu'on est déjà déguisé — disguise() défait puis refait le
+     * déguisement à chaque appel (cf. disguiseInternal), donc rappeler cette
+     * méthode plusieurs fois de suite permet de "copier" un nouveau bloc à
+     * chaque fois sans jamais avoir besoin de redevenir soi-même entre deux.
+     */
+    public void quickDisguiseOnTarget(Player player) {
         Block target = player.getTargetBlockExact(TRANSFORMER_RANGE, FluidCollisionMode.NEVER);
         if (target == null || target.getType().isAir() || !target.getType().isSolid()) {
             player.sendMessage(ChatColor.RED + "Vise un bloc valide (à " + TRANSFORMER_RANGE + " blocs max) !");
             return;
         }
-        disguise(player, target.getBlockData());
+        disguise(player, target);
         player.sendMessage(ChatColor.GREEN + "Transformé en "
                 + target.getType().name().toLowerCase().replace('_', ' ') + " !");
     }
@@ -1016,22 +1237,24 @@ public class GameManager {
         }
         float next = resizeSizes[(idx + 1) % resizeSizes.length];
         scales.put(id, next);
-        // Rétrécit/agrandit la hitbox et le corps du joueur, pour se faufiler
-        // sous un bloc de hauteur ou une dalle sans traverser les blocs pour
-        // autant (la collision Minecraft reste pleine, juste plus petite).
-        applyScale(player, next);
+        // Rétrécit/agrandit la hitbox et le corps du joueur. C'est la taille
+        // "normale" du joueur quand il a de la place ; l'ajustement automatique
+        // (cf. autoAdjustScale) peut la rétrécir davantage tout seul en dessous
+        // d'un bloc bas ou d'une dalle, puis revient à cette taille dès que
+        // c'est de nouveau dégagé.
+        // On applique tout de suite le plafond du déguisement en cours (s'il y
+        // en a un) : sans ça, la hitbox appliquée dépassait un instant la taille
+        // du bloc imité (le temps qu'autoAdjustScale la corrige au tick suivant),
+        // ce qui provoquait un micro-clignotement de taille au moment du clic.
+        float clamped = Math.min(next, disguiseScale.getOrDefault(id, Float.MAX_VALUE));
+        applyScale(player, clamped);
+        appliedScale.put(id, clamped);
+        clearStreak.put(id, 0);
         // Le bloc du déguisement, lui, NE change PAS de taille : il reste un
         // vrai bloc à échelle 1, quelle que soit la taille du joueur en dessous.
 
-        String passage;
-        if (next <= 0.28f) {
-            passage = ChatColor.GRAY + " — passe sous une dalle";
-        } else if (next < 0.9f) {
-            passage = ChatColor.GRAY + " — passe sous un bloc de hauteur";
-        } else {
-            passage = "";
-        }
-        player.sendMessage(ChatColor.AQUA + "Taille : " + next + "x" + passage);
+        player.sendMessage(ChatColor.AQUA + "Taille normale : " + next + "x"
+                + ChatColor.GRAY + " (rétrécit tout seul sous un bloc bas ou une dalle si besoin)");
     }
 
     // ---------------------------------------------------------------------

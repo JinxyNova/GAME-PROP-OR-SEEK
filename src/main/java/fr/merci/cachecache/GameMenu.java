@@ -9,15 +9,26 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.MenuType;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.view.AnvilView;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.function.BiConsumer;
 
 /**
@@ -29,6 +40,10 @@ public class GameMenu implements Listener {
 
     private final CacheCachePlugin plugin;
     private final GameManager gameManager;
+
+    // Joueurs actuellement en train de taper une recherche de bloc dans l'enclume
+    // virtuelle (cf. openBlockSearch / onPrepareAnvil / onAnvilResultClick).
+    private final Set<UUID> searchingBlockPicker = new HashSet<>();
 
     public GameMenu(CacheCachePlugin plugin, GameManager gameManager) {
         this.plugin = plugin;
@@ -59,6 +74,192 @@ public class GameMenu implements Listener {
         if (lore.length > 0) meta.setLore(Arrays.asList(lore));
         stack.setItemMeta(meta);
         return stack;
+    }
+
+    // ---------------------------------------------------------------------
+    // Menu de sélection de bloc (déguisement Prop Hunt, cf. Pistolet Transformeur)
+    // ---------------------------------------------------------------------
+
+    // Blocs "techniques"/admin qu'on ne propose pas comme déguisement (invisibles,
+    // réservés à la création, ou instables une fois posés via BlockDisplay).
+    private static final Set<Material> DISGUISE_EXCLUDED = EnumSet.of(
+            Material.AIR, Material.CAVE_AIR, Material.VOID_AIR,
+            Material.BARRIER, Material.LIGHT, Material.STRUCTURE_VOID,
+            Material.STRUCTURE_BLOCK, Material.JIGSAW,
+            Material.COMMAND_BLOCK, Material.CHAIN_COMMAND_BLOCK, Material.REPEATING_COMMAND_BLOCK,
+            Material.MOVING_PISTON, Material.PISTON_HEAD
+    );
+
+    private static final List<Material> DISGUISE_BLOCKS = buildDisguiseBlockList();
+
+    private static List<Material> buildDisguiseBlockList() {
+        List<Material> list = new ArrayList<>();
+        for (Material material : Material.values()) {
+            if (!material.isBlock() || !material.isItem()) continue;
+            if (material.isLegacy()) continue;
+            if (DISGUISE_EXCLUDED.contains(material)) continue;
+            list.add(material);
+        }
+        list.sort(Comparator.comparing(Enum::name));
+        return list;
+    }
+
+    private static final int BLOCK_PICKER_PAGE_SIZE = 45; // 5 lignes de 9, la dernière ligne sert à la navigation
+
+    private String prettyBlockName(Material material) {
+        String lower = material.name().toLowerCase().replace('_', ' ');
+        return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
+    }
+
+    /**
+     * Filtre DISGUISE_BLOCKS sur le nom du bloc (nom technique anglais, ex.
+     * "oak_log") : la recherche est insensible à la casse et accepte aussi
+     * bien les espaces que les underscores ("oak log" ou "oak_log" marchent
+     * tous les deux). Une requête vide renvoie la liste complète.
+     */
+    private List<Material> filterBlocks(String query) {
+        if (query == null || query.isBlank()) return DISGUISE_BLOCKS;
+        String needle = query.trim().toLowerCase().replace(' ', '_');
+        List<Material> out = new ArrayList<>();
+        for (Material material : DISGUISE_BLOCKS) {
+            if (material.name().toLowerCase().contains(needle)) out.add(material);
+        }
+        return out;
+    }
+
+    public void openBlockPicker(Player player) {
+        openBlockPicker(player, 0, "");
+    }
+
+    private void openBlockPicker(Player player, int page, String query) {
+        List<Material> results = filterBlocks(query);
+        boolean hasQuery = query != null && !query.isBlank();
+        int totalPages = Math.max(1, (int) Math.ceil(results.size() / (double) BLOCK_PICKER_PAGE_SIZE));
+        int currentPage = Math.max(0, Math.min(page, totalPages - 1));
+
+        Holder holder = new Holder();
+        String titleQuery = hasQuery ? " \"" + query.trim() + "\"" : "";
+        Inventory inv = createInventory(holder, 54,
+                ChatColor.GOLD + "Choisir un bloc" + titleQuery + " (" + (currentPage + 1) + "/" + totalPages + ")");
+
+        int start = currentPage * BLOCK_PICKER_PAGE_SIZE;
+        int end = Math.min(results.size(), start + BLOCK_PICKER_PAGE_SIZE);
+        for (int i = start; i < end; i++) {
+            Material material = results.get(i);
+            int slot = i - start;
+            String label = prettyBlockName(material);
+            inv.setItem(slot, item(material, ChatColor.WHITE + label,
+                    ChatColor.GRAY + "Clique pour te déguiser en " + label.toLowerCase()));
+            holder.actions.put(slot, (p, click) -> {
+                gameManager.disguiseAsMaterial(p, material);
+                p.closeInventory();
+            });
+        }
+        if (results.isEmpty()) {
+            inv.setItem(22, item(Material.BARRIER, ChatColor.RED + "Aucun bloc trouvé",
+                    ChatColor.GRAY + "Le nom recherché est en anglais",
+                    ChatColor.GRAY + "(ex. \"oak\", \"stone\", \"glass\")"));
+        }
+
+        if (currentPage > 0) {
+            inv.setItem(45, item(Material.ARROW, ChatColor.YELLOW + "Page précédente"));
+            holder.actions.put(45, (p, click) -> openBlockPicker(p, currentPage - 1, query));
+        }
+        inv.setItem(49, item(Material.BOOK, ChatColor.GRAY + "Page " + (currentPage + 1) + " / " + totalPages,
+                ChatColor.GRAY + results.size() + " bloc(s)"
+                        + (hasQuery ? " correspondant(s)" : " disponibles")));
+        if (currentPage < totalPages - 1) {
+            inv.setItem(53, item(Material.ARROW, ChatColor.YELLOW + "Page suivante"));
+            holder.actions.put(53, (p, click) -> openBlockPicker(p, currentPage + 1, query));
+        }
+
+        inv.setItem(48, item(Material.NAME_TAG,
+                hasQuery ? ChatColor.AQUA + "Recherche : \"" + query.trim() + "\"" : ChatColor.AQUA + "Rechercher un bloc",
+                ChatColor.GRAY + "Clique pour taper un nom de bloc",
+                ChatColor.GRAY + "(nom anglais, ex. \"oak\", \"stone\")"));
+        holder.actions.put(48, (p, click) -> openBlockSearch(p));
+
+        if (hasQuery) {
+            inv.setItem(50, item(Material.BARRIER, ChatColor.RED + "Effacer la recherche"));
+            holder.actions.put(50, (p, click) -> openBlockPicker(p, 0, ""));
+        }
+
+        inv.setItem(47, item(Material.BARRIER, ChatColor.RED + "Redevenir toi-même",
+                ChatColor.GRAY + "Annule le déguisement en cours"));
+        holder.actions.put(47, (p, click) -> {
+            gameManager.undisguise(p);
+            p.sendMessage(ChatColor.GRAY + "Tu redeviens toi-même !");
+            p.closeInventory();
+        });
+
+        inv.setItem(46, item(Material.ARROW, ChatColor.GRAY + "Retour"));
+        holder.actions.put(46, (p, click) -> openMain(p));
+
+        player.openInventory(inv);
+    }
+
+    /**
+     * Ouvre une enclume "virtuelle" (pas besoin d'une vraie enclume posée dans
+     * le monde) qui sert uniquement de champ de saisie de texte : on se sert
+     * du champ de renommage comme barre de recherche, et de la case résultat
+     * comme bouton de validation (cf. onPrepareAnvil / onAnvilResultClick).
+     * Aucun coût en expérience ni en matériaux n'est réellement prélevé, vu
+     * que le clic sur le résultat est annulé (event.setCancelled) avant que
+     * quoi que ce soit ne soit transféré.
+     */
+    private void openBlockSearch(Player player) {
+        AnvilView view = MenuType.ANVIL.create(player,
+                LegacyComponentSerializer.legacySection().deserialize(ChatColor.GOLD + "Rechercher un bloc"));
+        view.setRepairCost(0);
+        searchingBlockPicker.add(player.getUniqueId());
+        player.openInventory(view);
+    }
+
+    /**
+     * Met à jour la case résultat de l'enclume de recherche à chaque frappe :
+     * affiche juste le nombre de blocs qui correspondent au texte tapé, sans
+     * jamais consommer d'objet/expérience (cf. openBlockSearch).
+     */
+    @EventHandler
+    public void onPrepareAnvil(PrepareAnvilEvent event) {
+        if (!(event.getView().getPlayer() instanceof Player player)) return;
+        if (!searchingBlockPicker.contains(player.getUniqueId())) return;
+
+        String query = event.getView().getRenameText();
+        int count = filterBlocks(query).size();
+        String label = (query == null || query.isBlank())
+                ? ChatColor.GRAY + "Tape un nom de bloc..."
+                : ChatColor.AQUA + count + " bloc(s) trouvé(s)";
+        event.setResult(item(Material.PAPER, label,
+                ChatColor.GRAY + "Clique ici pour valider la recherche"));
+    }
+
+    /**
+     * Valide la recherche quand le joueur clique sur la case résultat de
+     * l'enclume : rouvre le menu de sélection de bloc filtré sur le texte
+     * tapé, à la page 1. Le clic est toujours annulé pour ne jamais laisser
+     * l'enclume prélever de coût.
+     */
+    @EventHandler
+    public void onAnvilResultClick(InventoryClickEvent event) {
+        if (!(event.getView() instanceof AnvilView anvilView)) return;
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (!searchingBlockPicker.contains(player.getUniqueId())) return;
+        event.setCancelled(true);
+        if (event.getRawSlot() != 2) return; // seule la case résultat valide la recherche
+
+        String query = anvilView.getRenameText();
+        searchingBlockPicker.remove(player.getUniqueId());
+        player.closeInventory();
+        openBlockPicker(player, 0, query == null ? "" : query);
+    }
+
+    /** Nettoie l'état de recherche si le joueur ferme l'enclume sans valider (touche Echap). */
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (event.getPlayer() instanceof Player player) {
+            searchingBlockPicker.remove(player.getUniqueId());
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -129,6 +330,11 @@ public class GameMenu implements Listener {
         inv.setItem(9, item(Material.ENDER_EYE, ChatColor.LIGHT_PURPLE + "Points de téléportation",
                 ChatColor.GRAY + "Lobby, spawn des souris, spawn des chats"));
         holder.actions.put(9, (p, click) -> openTeleportPoints(p));
+
+        inv.setItem(17, item(Material.GRASS_BLOCK, ChatColor.GREEN + "Choisir un bloc",
+                ChatColor.GRAY + DISGUISE_BLOCKS.size() + " blocs disponibles",
+                ChatColor.GRAY + "(déguisement Prop Hunt)"));
+        holder.actions.put(17, (p, click) -> openBlockPicker(p));
 
         player.openInventory(inv);
     }
