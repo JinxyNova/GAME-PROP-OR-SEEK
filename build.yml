@@ -1,27 +1,30 @@
-name: Build plugin
+name: build
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 25
+      - name: Installer le JDK 25 (requis par pom.xml : maven.compiler.release=25)
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '25'
+          cache: maven
 
-      - name: Build with Maven
-        run: mvn -B package --file pom.xml
+      - name: Compiler et empaqueter avec Maven
+        working-directory: cachecache
+        run: mvn -B -ntp clean package
 
-      - name: Upload artifact
+      - name: Publier le jar généré
         uses: actions/upload-artifact@v4
         with:
-          name: CacheCache-plugin
-          path: target/CacheCache.jar
+          name: CacheCache-jar
+          path: cachecache/target/CacheCache.jar
+          if-no-files-found: error
