@@ -1,5 +1,6 @@
 package fr.merci.cachecache;
 
+import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -9,6 +10,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.ProjectileHitEvent;
@@ -22,9 +24,11 @@ import org.bukkit.persistence.PersistentDataType;
 
 public class GameListener implements Listener {
     private final GameManager gameManager;
+    private final GameMenu gameMenu;
 
-    public GameListener(GameManager gameManager) {
+    public GameListener(GameManager gameManager, GameMenu gameMenu) {
         this.gameManager = gameManager;
+        this.gameMenu = gameMenu;
     }
 
     @EventHandler
@@ -33,21 +37,38 @@ public class GameListener implements Listener {
         Player player = event.getPlayer();
         if (gameManager.getState() == GameManager.State.WAITING) return;
         if (!gameManager.isHider(player.getUniqueId())) return;
-        if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
+
+        Action action = event.getAction();
+        boolean rightClick = action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK;
+        boolean leftClick = action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK;
+        if (!rightClick && !leftClick) return;
 
         ItemStack hand = player.getInventory().getItemInMainHand();
         if (hand.getType() == Material.AIR) return;
 
-        // Pistolet Transformeur (canne à pêche, Prop Hunt uniquement) : se déguiser en visant un bloc,
-        // ou redevenir normal si déjà déguisé
+        // Pistolet Transformeur (canne à pêche, Prop Hunt uniquement) :
+        //  - Clic droit simple             : ouvre le menu de choix de bloc (paginé + recherche)
+        //  - Accroupi (shift) + clic droit : copie instantanément le bloc visé, sans passer par le menu
+        //  - Clic gauche                   : redevient normal (annule le déguisement en cours)
         if (gameManager.isTransformerTool(hand)) {
-            gameManager.useTransformer(player);
             event.setCancelled(true);
+            if (leftClick) {
+                if (gameManager.isDisguised(player.getUniqueId())) {
+                    gameManager.undisguise(player);
+                    player.sendMessage(ChatColor.GRAY + "Tu redeviens toi-même !");
+                }
+            } else if (player.isSneaking()) {
+                gameManager.quickDisguiseOnTarget(player);
+            } else {
+                gameMenu.openBlockPicker(player);
+            }
             gameManager.snapHandToEmpty(player);
             return;
         }
 
-        // Clic droit simple avec les objets spéciaux
+        // Les autres objets (plume, feu d'artifice, sifflet) restent clic droit uniquement.
+        if (!rightClick) return;
+
         if (hand.getType() == Material.FEATHER) {
             gameManager.cycleSize(player);
             event.setCancelled(true);
@@ -60,6 +81,22 @@ public class GameListener implements Listener {
             gameManager.throwDecoy(player, hand, "whistle");
             event.setCancelled(true);
             gameManager.snapHandToEmpty(player);
+        }
+    }
+
+    /**
+     * Empêche de casser un bloc par accident en cliquant gauche avec le Pistolet
+     * Transformeur en main (le clic gauche sert désormais à annuler le
+     * déguisement, cf. onInteract) : sans ce filet, viser un bloc à casse
+     * instantanée (fleur, torche, redstone...) le casserait quand même, car
+     * annuler PlayerInteractEvent ne bloque pas la casse de bloc vanilla.
+     */
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onBlockBreak(BlockBreakEvent event) {
+        if (!gameManager.isHider(event.getPlayer().getUniqueId())) return;
+        ItemStack hand = event.getPlayer().getInventory().getItemInMainHand();
+        if (gameManager.isTransformerTool(hand)) {
+            event.setCancelled(true);
         }
     }
 
@@ -132,6 +169,15 @@ public class GameListener implements Listener {
         // Ré-arme le double saut dès que le joueur retouche le sol.
         if (player.isOnGround() && gameManager.isDoubleJumpEligible(player.getUniqueId())) {
             gameManager.rearmDoubleJump(player);
+        }
+
+        // Rend les blocs de déguisement solides : personne (à part la souris qui se
+        // cache dedans) ne doit pouvoir marcher dans la case qu'ils occupent, sinon
+        // ça se traverse comme si de rien n'était. On bloque juste le déplacement
+        // (comme un vrai bloc) sans toucher aux coups d'épée, qui continuent de
+        // viser directement le joueur invisible en dessous.
+        if (event.getTo() != null && gameManager.isBlockedByDisguise(player, event.getTo())) {
+            event.setTo(event.getFrom());
         }
     }
 
