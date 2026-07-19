@@ -166,7 +166,7 @@ public class GameMenu implements Listener {
             holder.actions.put(45, (p, click) -> openBlockPicker(p, currentPage - 1, query));
         }
         inv.setItem(49, item(Material.BOOK, ChatColor.GRAY + "Page " + (currentPage + 1) + " / " + totalPages,
-                ChatColor.GRAY + results.size() + " bloc(s)"
+                ChatColor.GRAY + "" + results.size() + " bloc(s)"
                         + (hasQuery ? " correspondant(s)" : " disponibles")));
         if (currentPage < totalPages - 1) {
             inv.setItem(53, item(Material.ARROW, ChatColor.YELLOW + "Page suivante"));
@@ -229,7 +229,7 @@ public class GameMenu implements Listener {
         int count = filterBlocks(query).size();
         String label = (query == null || query.isBlank())
                 ? ChatColor.GRAY + "Tape un nom de bloc..."
-                : ChatColor.AQUA + count + " bloc(s) trouvé(s)";
+                : ChatColor.AQUA + "" + count + " bloc(s) trouvé(s)";
         event.setResult(item(Material.PAPER, label,
                 ChatColor.GRAY + "Clique ici pour valider la recherche"));
     }
@@ -332,7 +332,7 @@ public class GameMenu implements Listener {
         holder.actions.put(9, (p, click) -> openTeleportPoints(p));
 
         inv.setItem(17, item(Material.GRASS_BLOCK, ChatColor.GREEN + "Choisir un bloc",
-                ChatColor.GRAY + DISGUISE_BLOCKS.size() + " blocs disponibles",
+                ChatColor.GRAY + "" + DISGUISE_BLOCKS.size() + " blocs disponibles",
                 ChatColor.GRAY + "(déguisement Prop Hunt)"));
         holder.actions.put(17, (p, click) -> openBlockPicker(p));
 
