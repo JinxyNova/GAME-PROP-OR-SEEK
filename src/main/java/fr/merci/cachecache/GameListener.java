@@ -1,6 +1,7 @@
 package fr.merci.cachecache;
 
 import org.bukkit.ChatColor;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
@@ -21,6 +22,7 @@ import org.bukkit.event.player.PlayerToggleFlightEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.util.Vector;
 
 public class GameListener implements Listener {
     private final GameManager gameManager;
@@ -178,6 +180,25 @@ public class GameListener implements Listener {
         // viser directement le joueur invisible en dessous.
         if (event.getTo() != null && gameManager.isBlockedByDisguise(player, event.getTo())) {
             event.setTo(event.getFrom());
+            return;
+        }
+
+        // Permet de marcher SUR un bloc de déguisement (le BlockDisplay n'a aucune
+        // collision vanilla à lui tout seul, donc sans ça tout le monde tombe au
+        // travers au lieu de pouvoir se tenir dessus comme sur un vrai bloc).
+        if (event.getTo() != null) {
+            Double supportY = gameManager.getDisguiseSupportY(player, event.getFrom(), event.getTo());
+            if (supportY != null) {
+                Location landed = event.getTo().clone();
+                landed.setY(supportY);
+                event.setTo(landed);
+                player.setFallDistance(0f);
+                Vector velocity = player.getVelocity();
+                if (velocity.getY() < 0) {
+                    velocity.setY(0);
+                    player.setVelocity(velocity);
+                }
+            }
         }
     }
 

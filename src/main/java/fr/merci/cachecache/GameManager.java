@@ -96,7 +96,12 @@ public class GameManager {
     // petite que ce bloc (0.5 par ex.) pour pouvoir se faufiler sous un autre bloc bas ou
     // une dalle ailleurs sur la carte. Absent (pas de déguisement en cours) = pas de plafond
     // supplémentaire au-delà de scales.
-    private final Map<UUID, Float> disguiseScale = new HashMap<>();
+    // Hauteur RÉELLE (0..1, fraction de la case) du bloc actuellement imité, pour
+    // savoir où poser les pieds de quelqu'un qui marche dessus (cf.
+    // getDisguiseSupportY) : une dalle doit porter à 0.5, pas à 1.0 comme un bloc
+    // plein. À ne pas confondre avec disguiseScale, qui est le plafond de taille
+    // (déjà divisé par deux) imposé à la souris déguisée elle-même.
+    private final Map<UUID, Float> disguiseHeight = new HashMap<>();
     // Nombre de ticks consécutifs avec assez de place au-dessus, avant d'autoriser à regrandir
     // (évite que la taille oscille en marchant sous un plafond irrégulier)
     private final Map<UUID, Integer> clearStreak = new HashMap<>();
@@ -586,6 +591,7 @@ public class GameManager {
         frozenLoc.clear();
         scales.clear();
         disguiseScale.clear();
+        disguiseHeight.clear();
         appliedScale.clear();
         lastMoveLoc.clear();
         stillSeconds.clear();
@@ -902,13 +908,13 @@ public class GameManager {
     // ---------------------------------------------------------------------
 
     public void disguise(Player player, Block target) {
-        disguiseInternal(player, target.getBlockData(), computeDisguiseScale(target));
+        disguiseInternal(player, target.getBlockData(), computeDisguiseHeight(target));
     }
 
     /**
      * Se déguise directement à partir d'un Material choisi dans le menu (cf.
      * GameMenu#openBlockPicker), sans avoir besoin de viser un bloc réellement
-     * posé dans le monde. La taille (cf. estimateDisguiseScale) est alors
+     * posé dans le monde. La taille (cf. estimateDisguiseHeight) est alors
      * estimée à partir du nom du bloc plutôt que de sa vraie bounding box,
      * puisqu'aucun bloc réel n'existe à cet endroit précis.
      */
@@ -917,12 +923,12 @@ public class GameManager {
             player.sendMessage(ChatColor.RED + "Bloc invalide.");
             return;
         }
-        disguiseInternal(player, material.createBlockData(), estimateDisguiseScale(material));
+        disguiseInternal(player, material.createBlockData(), estimateDisguiseHeight(material));
         player.sendMessage(ChatColor.GREEN + "Transformé en "
                 + material.name().toLowerCase().replace('_', ' ') + " !");
     }
 
-    private void disguiseInternal(Player player, BlockData data, float blockCeiling) {
+    private void disguiseInternal(Player player, BlockData data, float height) {
         UUID id = player.getUniqueId();
         undisguise(player);
 
@@ -965,10 +971,17 @@ public class GameManager {
         stillSeconds.put(id, 0);
         frozenHiders.remove(id);
 
+        // Hauteur réelle du bloc imité (0..1), utilisée pour savoir où poser les
+        // pieds de quelqu'un qui marche dessus (cf. getDisguiseSupportY) : une
+        // dalle (0.5) ou un tapis (0.0625) ne doit pas porter à la même hauteur
+        // qu'un bloc plein (1.0).
+        disguiseHeight.put(id, height);
+
         // La souris déguisée doit rester bien plus petite que le bloc qu'elle imite
         // (le bloc du déguisement, lui, reste toujours à échelle 1, cf. plus haut) :
         // ça lui permet de se faufiler sous un autre bloc bas ou une dalle ailleurs
         // sur la carte. Un bloc plein donne donc une taille 0.5, une dalle 0.25, etc.
+        float blockCeiling = Math.max((float) (Math.min(height, 1.0) * 0.5), MIN_AUTO_SCALE);
         disguiseScale.put(id, blockCeiling);
         float initial = Math.min(scales.getOrDefault(id, 1.0f), blockCeiling);
         applyScale(player, initial);
@@ -978,15 +991,13 @@ public class GameManager {
     }
 
     /**
-     * Taille (échelle) que doit prendre la souris quand elle se déguise sur ce bloc,
-     * calculée à partir de la hauteur réelle du bloc visé (sa "hitbox" dans le monde),
-     * pas de sa taille visuelle affichée (le déguisement reste toujours un bloc plein
-     * à l'écran, cf. buildTransformation). Un bloc plein (hauteur 1) donne une souris
-     * de taille 0.5 ; une dalle ou un tapis (hauteur ~0.5 ou moins) donne une taille
-     * plus petite encore, pour qu'elle puisse ensuite se faufiler ailleurs sous un
-     * bloc bas ou une dalle. Toujours borné à MIN_AUTO_SCALE minimum.
+     * Hauteur réelle (0..1, fraction de la case) du bloc visé, mesurée à partir
+     * de sa vraie bounding box dans le monde. Sert à la fois à calculer le
+     * plafond de taille de la souris déguisée (cf. disguiseInternal) et la
+     * hauteur à laquelle quelqu'un doit se tenir en marchant dessus (cf.
+     * getDisguiseSupportY).
      */
-    private float computeDisguiseScale(Block target) {
+    private float computeDisguiseHeight(Block target) {
         double height = 1.0;
         try {
             BoundingBox box = target.getBoundingBox();
@@ -997,31 +1008,26 @@ public class GameManager {
             // Certains blocs (data invalides, versions différentes...) peuvent lever :
             // on retombe alors sur l'hypothèse "bloc plein" (hauteur 1) par sécurité.
         }
-        float scale = (float) (Math.min(height, 1.0) * 0.5);
-        return Math.max(scale, MIN_AUTO_SCALE);
+        return (float) Math.max(0.0, Math.min(height, 1.0));
     }
 
     /**
-     * Même idée que computeDisguiseScale, mais à partir du nom du Material seul
+     * Même idée que computeDisguiseHeight, mais à partir du nom du Material seul
      * (utilisé pour le menu de sélection, cf. disguiseAsMaterial), puisqu'aucun
      * bloc réel n'est disponible dans le monde pour mesurer sa vraie bounding box.
      */
-    private float estimateDisguiseScale(Material material) {
+    private float estimateDisguiseHeight(Material material) {
         String name = material.name();
-        double height;
         if (name.equals("SNOW") || name.contains("CARPET")) {
-            height = 0.0625;
+            return 0.0625f;
         } else if (name.contains("PRESSURE_PLATE")) {
-            height = 0.125;
+            return 0.125f;
         } else if (name.contains("SLAB")) {
-            height = 0.5;
+            return 0.5f;
         } else if (name.contains("BED")) {
-            height = 0.5625;
-        } else {
-            height = 1.0;
+            return 0.5625f;
         }
-        float scale = (float) (Math.min(height, 1.0) * 0.5);
-        return Math.max(scale, MIN_AUTO_SCALE);
+        return 1.0f;
     }
 
     public void undisguise(Player player) {
@@ -1035,6 +1041,7 @@ public class GameManager {
         stillSeconds.remove(id);
         frozenHiders.remove(id);
         disguiseScale.remove(id);
+        disguiseHeight.remove(id);
         // On rend sa taille normale au joueur en sortant du déguisement : plus
         // besoin d'être rétréci pour se faufiler une fois qu'il redevient lui-même.
         float desired = scales.getOrDefault(id, 1.0f);
@@ -1183,6 +1190,42 @@ public class GameManager {
             }
         }
         return false;
+    }
+
+    /**
+     * Renvoie la hauteur (Y) sur laquelle "mover" doit être posé s'il marche
+     * sur le dessus d'un bloc de déguisement (une AUTRE souris que "mover"),
+     * ou null si aucun déguisement ne se trouve sous lui à cet endroit.
+     * Comme le bloc de déguisement n'est qu'une entité visuelle (BlockDisplay),
+     * il n'a aucune collision vanilla : sans ça, tout le monde tombe au travers
+     * au lieu de pouvoir marcher dessus comme sur un vrai bloc. On ne "rattrape"
+     * que ceux qui arrivaient d'au-dessus (ou déjà posés dessus) pour ne pas
+     * bloquer quelqu'un qui marche simplement en dessous d'un déguisement.
+     */
+    public Double getDisguiseSupportY(Player mover, Location from, Location to) {
+        if (to == null || to.getWorld() == null) return null;
+        if (disguises.isEmpty()) return null;
+        UUID moverId = mover.getUniqueId();
+        for (Map.Entry<UUID, BlockDisplay> entry : disguises.entrySet()) {
+            if (entry.getKey().equals(moverId)) continue;
+            BlockDisplay display = entry.getValue();
+            if (display == null || !display.isValid()) continue;
+            Location d = display.getLocation();
+            if (!Objects.equals(d.getWorld(), to.getWorld())) continue;
+            if (d.getBlockX() != to.getBlockX() || d.getBlockZ() != to.getBlockZ()) continue;
+
+            // Hauteur réelle du bloc imité (0.5 pour une dalle, 0.0625 pour un
+            // tapis, 1.0 pour un bloc plein...), pas toujours +1 comme pour un
+            // bloc plein : sans ça, marcher sur une souris déguisée en dalle
+            // vous plaçait à la hauteur d'un bloc entier au-dessus, en plein
+            // dans le vide.
+            double topY = d.getBlockY() + disguiseHeight.getOrDefault(entry.getKey(), 1.0f);
+            boolean wasAboveOrOnTop = from == null || from.getY() >= topY - 0.001;
+            if (wasAboveOrOnTop && to.getY() < topY) {
+                return topY;
+            }
+        }
+        return null;
     }
 
     /**
